@@ -29,13 +29,15 @@ test("production server renders the session controls without starter content", a
   assert.match(html, /Closed hat/);
   assert.match(html, /Warm pad/);
   assert.match(html, /Record sound/);
-  assert.match(html, /Reconstruction frequencies/);
-  assert.match(html, /Reconstruct/);
-  assert.match(html, /5 seconds max/);
+  assert.match(html, /Construction wave count/);
+  assert.match(html, /Construct with triangle waves/);
+  assert.match(html, /Construct with square waves/);
+
   assert.match(html, /FFT/);
-  assert.match(html, /Selection start seconds/);
-  assert.match(html, /Selection end seconds/);
-  assert.match(html, /Full sound/);
+  assert.doesNotMatch(
+    html,
+    /Selection start seconds|Selection end seconds|Full sound|Preview sound|>Reconstruct</,
+  );
   assert.doesNotMatch(
     html,
     /Session name|Track name|master-strip|Four on the floor/,

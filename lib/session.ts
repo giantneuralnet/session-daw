@@ -1,4 +1,8 @@
-import { validReconstruction, type Reconstruction } from "./resynthesis.ts";
+import {
+  validReconstruction,
+  MAX_PARTIALS,
+  type Reconstruction,
+} from "./resynthesis.ts";
 export const MIN_PITCH = -36;
 export const MAX_PITCH = 60;
 export type Wave = "sine" | "triangle" | "sawtooth" | "square" | "noise";
@@ -177,6 +181,17 @@ export function parseProject(raw: string): Project {
       (t.kind === "recorded" && !t.reconstruction)
     )
       throw Error("Invalid recorded instrument.");
+    if (t.reconstruction && t.reconstruction.wave === undefined) {
+      t.reconstruction = {
+        ...t.reconstruction,
+        wave: "sine",
+        count: Math.min(t.reconstruction.count, MAX_PARTIALS),
+        frames: t.reconstruction.frames.map(
+          (frame: Reconstruction["frames"][number]) =>
+            frame.slice(0, MAX_PARTIALS),
+        ),
+      };
+    }
     for (const [key, min, max] of [
       ["frequency", 20, 2000],
       ["attack", 0.001, 2],

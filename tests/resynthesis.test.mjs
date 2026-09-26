@@ -21,6 +21,39 @@ const signal = (seconds, fn) =>
 const mse = (a, b) =>
   a.reduce((sum, v, i) => sum + (v - b[i]) ** 2, 0) / a.length;
 const tone = (hz, t) => Math.sin(2 * Math.PI * hz * t);
+test("construction shapes produce different band-limited audio and save with a 32-wave maximum", () => {
+  const model = analyzeSound(signal(0.3, (t) => 0.3 * tone(220, t)));
+  assert.ok(model.frames.every((frame) => frame.length <= 32));
+  const sine = renderSound({ ...model, wave: "sine" });
+  const triangle = renderSound({ ...model, wave: "triangle" });
+  const square = renderSound({ ...model, wave: "square" });
+  assert.ok(mse(sine, triangle) > 0.0001);
+  assert.ok(mse(sine, square) > 0.0001);
+  assert.ok(mse(triangle, square) > 0.0001);
+  for (const wave of ["sine", "triangle", "square"]) {
+    const p = emptyProject();
+    p.tracks[0].kind = "recorded";
+    p.tracks[0].reconstruction = { ...model, wave };
+    assert.deepEqual(parseProject(JSON.stringify(p)), p);
+  }
+  assert.equal(validReconstruction({ ...model, count: 33 }), false);
+  assert.equal(validReconstruction({ ...model, wave: "sawtooth" }), false);
+  for (const samples of [sine, triangle, square])
+    assert.ok(
+      samples.every((v) => Number.isFinite(v) && Math.abs(v) <= 0.980001),
+    );
+});
+test("older recordings with more waves load at the new 32-wave limit", () => {
+  const p = emptyProject(),
+    model = analyzeSound(signal(0.2, (t) => 0.3 * tone(440, t)));
+  delete model.wave;
+  model.count = 128;
+  p.tracks[0].kind = "recorded";
+  p.tracks[0].reconstruction = model;
+  const restored = parseProject(JSON.stringify(p)).tracks[0].reconstruction;
+  assert.equal(restored.count, 32);
+  assert.equal(restored.wave, "sine");
+});
 
 test("microphone pauses are trimmed without cutting the attack or release", () => {
   const input = signal(2, (t) =>
@@ -59,11 +92,12 @@ test("more components recover a changing multi-tone sound, including attack and 
   assert.ok(validReconstruction(model));
   const low = renderSound({ ...model, count: 1 });
   const middle = renderSound({ ...model, count: 16 });
-  const high = renderSound({ ...model, count: 128 });
+  const high = renderSound({ ...model, count: 32 });
   assert.equal(high.length, input.length);
   assert.ok(mse(input, high) < mse(input, middle));
   assert.ok(mse(input, middle) < mse(input, low) / 20);
-  assert.ok(mse(input, high) < 1e-7, `Error: ${mse(input, high)}`);
+  // A 32-wave budget deliberately trades fidelity for compact synthesis.
+  assert.ok(mse(input, high) < 1e-5, `Error: ${mse(input, high)}`);
   const frequencies = model.frames[4].map((p) => p.frequency);
   for (const hz of [220, 443, 931, 2192])
     assert.ok(
@@ -84,7 +118,10 @@ test("chirps and transients retain time evolution, rather than a frozen FFT snap
     Math.abs(model.frames[4][0].frequency - model.frames[14][0].frequency) >
       300,
   );
-  assert.ok(mse(input, renderSound({ ...model, count: 128 })) < 0.0001);
+  const high = renderSound({ ...model, count: 32 });
+  assert.ok(
+    mse(input, high) < mse(input, renderSound({ ...model, count: 1 })) / 10,
+  );
 });
 test("spectral instruments round-trip JSON without storing samples and reject malformed data", () => {
   const p = emptyProject();

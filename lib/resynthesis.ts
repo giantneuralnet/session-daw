@@ -1,6 +1,7 @@
 // Short-time Fourier analysis. The saved instrument contains sinusoid
 // frequencies, amplitudes and phases, never the microphone PCM.
-export const MAX_PARTIALS = 128;
+export const MAX_PARTIALS = 32;
+export type ConstructionWave = "sine" | "triangle" | "square";
 export const SAMPLE_RATE = 24000;
 export const FFT_SIZE = 4096;
 export const HOP_SIZE = 1024;
@@ -14,6 +15,7 @@ export type Reconstruction = {
   length: number;
   referenceFrequency: number;
   count: number;
+  wave?: ConstructionWave;
   frames: Partial[][];
 };
 
@@ -137,6 +139,7 @@ export function analyzeSound(samples: Float32Array): Reconstruction {
     length: samples.length,
     referenceFrequency: (referenceBin * SAMPLE_RATE) / FFT_SIZE,
     count: 32,
+    wave: "sine",
     frames,
   };
 }
@@ -147,13 +150,29 @@ export function renderSound(model: Reconstruction): Float32Array {
   model.frames.forEach((frame, f) => {
     const real = new Float64Array(FFT_SIZE),
       imag = new Float64Array(FFT_SIZE);
-    for (const p of frame.slice(0, model.count)) {
+    for (const p of frame.slice(0, Math.min(model.count, MAX_PARTIALS))) {
       const bin = Math.round((p.frequency * FFT_SIZE) / SAMPLE_RATE);
       const magnitude = (p.amplitude * FFT_SIZE) / 2;
-      real[bin] = Math.cos(p.phase) * magnitude;
-      imag[bin] = Math.sin(p.phase) * magnitude;
-      real[FFT_SIZE - bin] = real[bin];
-      imag[FFT_SIZE - bin] = -imag[bin];
+      const wave = model.wave ?? "sine";
+      // Band-limited odd-harmonic series, aligned to the FFT's cosine phase.
+      // Each selected component is one sine, triangle, or square oscillator.
+      const limit = wave === "sine" ? 1 : Math.floor((FFT_SIZE / 2 - 1) / bin);
+      for (let harmonic = 1; harmonic <= limit; harmonic += 2) {
+        const coefficient =
+          wave === "sine"
+            ? 1
+            : wave === "triangle"
+              ? 8 / (Math.PI ** 2 * harmonic ** 2)
+              : (4 / Math.PI) * ((harmonic % 4 === 1 ? 1 : -1) / harmonic);
+        const target = bin * harmonic;
+        const phase = p.phase * harmonic;
+        const r = Math.cos(phase) * magnitude * coefficient;
+        const im = Math.sin(phase) * magnitude * coefficient;
+        real[target] += r;
+        imag[target] += im;
+        real[FFT_SIZE - target] += r;
+        imag[FFT_SIZE - target] -= im;
+      }
     }
     fft(real, imag, true);
     for (let i = 0; i < FFT_SIZE; i++) {
@@ -188,7 +207,9 @@ export function validReconstruction(value: unknown): value is Reconstruction {
     m.length > SAMPLE_RATE * MAX_SECONDS ||
     !Number.isInteger(m.count) ||
     m.count < 1 ||
-    m.count > MAX_PARTIALS ||
+    m.count > (m.wave === undefined ? 128 : MAX_PARTIALS) ||
+    (m.wave !== undefined &&
+      !["sine", "triangle", "square"].includes(m.wave)) ||
     !Number.isFinite(m.referenceFrequency) ||
     m.referenceFrequency < 20 ||
     m.referenceFrequency > 2000 ||
@@ -197,7 +218,11 @@ export function validReconstruction(value: unknown): value is Reconstruction {
   )
     return false;
   return m.frames.every((frame) => {
-    if (!Array.isArray(frame) || frame.length > MAX_PARTIALS) return false;
+    if (
+      !Array.isArray(frame) ||
+      frame.length > (m.wave === undefined ? 128 : MAX_PARTIALS)
+    )
+      return false;
     const bins = new Set<number>();
     return frame.every((p) => {
       if (
@@ -222,4 +247,20 @@ export function validReconstruction(value: unknown): value is Reconstruction {
       return true;
     });
   });
+}
+
+const renderedSounds = new WeakMap<Reconstruction, Float32Array>();
+export function rememberRenderedSound(
+  model: Reconstruction,
+  samples: Float32Array,
+) {
+  renderedSounds.set(model, samples);
+}
+export function renderedSound(model: Reconstruction) {
+  let samples = renderedSounds.get(model);
+  if (!samples) {
+    samples = renderSound(model);
+    renderedSounds.set(model, samples);
+  }
+  return samples;
 }

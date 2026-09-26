@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { computeFFT, runFFT } from "../lib/fft-job.ts";
+import { computeFFT, runFFT, cachedConstruction } from "../lib/fft-job.ts";
 import {
   moveWindow,
   selectedSound,
@@ -17,6 +17,29 @@ const recording = Float32Array.from(
       (i * 2 * Math.PI * (i < SAMPLE_RATE / 2 ? 220 : 880)) / SAMPLE_RATE,
     ),
 );
+test("construction reuses cached audio only for the same source, selection, count and shape", async () => {
+  const source = new Float32Array(recording);
+  let builds = 0;
+  const build = async () => {
+    builds++;
+    return computeFFT({ samples: source, count: 8 });
+  };
+  const first = await cachedConstruction(source, "0:24000:8:sine", build);
+  assert.equal(
+    await cachedConstruction(source, "0:24000:8:sine", build),
+    first,
+  );
+  assert.equal(builds, 1);
+  for (const key of [
+    "0:24000:16:sine",
+    "0:24000:8:triangle",
+    "1200:24000:8:sine",
+  ])
+    await cachedConstruction(source, key, build);
+  assert.equal(builds, 4);
+  await cachedConstruction(new Float32Array(source), "0:24000:8:sine", build);
+  assert.equal(builds, 5);
+});
 test("FFT analyzes only the selected window without silently trimming it", () => {
   const capture = {
     samples: recording,
@@ -24,10 +47,10 @@ test("FFT analyzes only the selected window without silently trimming it", () =>
   };
   const selected = selectedSound(capture);
   assert.equal(selected.length, SAMPLE_RATE / 2);
-  const { model, samples } = computeFFT({ samples: selected, count: 64 });
+  const { model, samples } = computeFFT({ samples: selected, count: 32 });
   assert.equal(model.length, SAMPLE_RATE / 2);
   assert.equal(samples.length, selected.length);
-  assert.equal(model.count, 64);
+  assert.equal(model.count, 32);
   assert.ok(Math.abs(model.referenceFrequency - 880) < 6);
   assert.equal(recording.length, SAMPLE_RATE);
   selected[0] = 123;

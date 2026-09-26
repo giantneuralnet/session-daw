@@ -1,5 +1,5 @@
 import { TailMonitor } from "./tail-monitor.ts";
-import { renderSound, type Reconstruction } from "./resynthesis.ts";
+import { renderedSound, type Reconstruction } from "./resynthesis.ts";
 import type { Project, Track } from "./session";
 type Channel = {
   input: GainNode;
@@ -38,6 +38,16 @@ export class AudioEngine {
   previewStop?: () => void;
   previewSerial = 0;
   reconstructedBuffers = new WeakMap<Reconstruction, AudioBuffer>();
+  previewBus?: {
+    input: GainNode;
+    gain: GainNode;
+    pan: StereoPannerNode;
+    wet: GainNode;
+    echo: GainNode;
+    delay: DelayNode;
+    compressor: DynamicsCompressorNode;
+    nodes: AudioNode[];
+  };
   onRecorded: (blob: Blob) => void = () => {};
   onError: (message: string) => void = () => {};
   constructor(project: Project) {
@@ -140,6 +150,7 @@ export class AudioEngine {
   async start() {
     await this.ctx.resume();
     if (this.playing || this.finishing) return;
+    this.clearPreview();
     this.playing = true;
     this.step = 0;
     this.next = this.ctx.currentTime + 0.06;
@@ -154,7 +165,7 @@ export class AudioEngine {
     this.pending.clear();
     if (immediate) {
       for (const stopVoice of this.voices) stopVoice();
-      this.previewStop?.();
+      this.clearPreview();
       this.lastVoiceEnd = this.ctx.currentTime + 0.03;
     }
     this.project = {
@@ -236,7 +247,74 @@ export class AudioEngine {
       this.next += 60 / this.project.bpm / 4;
     }
   }
-  cacheReconstruction(model: Reconstruction, samples = renderSound(model)) {
+  clearPreview() {
+    this.previewSerial++;
+    this.previewStop?.();
+    this.previewStop = undefined;
+    this.previewBus?.nodes.forEach((node) => node.disconnect());
+    this.previewBus = undefined;
+  }
+  previewDestination(t: Track) {
+    if (!this.previewBus) {
+      const input = this.ctx.createGain(),
+        gain = this.ctx.createGain(),
+        pan = this.ctx.createStereoPanner(),
+        wet = this.ctx.createGain(),
+        echo = this.ctx.createGain(),
+        delay = this.ctx.createDelay(2),
+        feedback = this.ctx.createGain(),
+        verb = this.ctx.createConvolver(),
+        compressor = this.ctx.createDynamicsCompressor();
+      const impulse = this.ctx.createBuffer(
+        2,
+        this.ctx.sampleRate * 1.8,
+        this.ctx.sampleRate,
+      );
+      for (let ch = 0; ch < 2; ch++) {
+        const samples = impulse.getChannelData(ch);
+        for (let i = 0; i < samples.length; i++)
+          samples[i] =
+            (Math.random() * 2 - 1) * Math.pow(1 - i / samples.length, 2.8);
+      }
+      verb.buffer = impulse;
+      feedback.gain.value = 0.32;
+      input.connect(gain);
+      input.connect(verb);
+      verb.connect(wet);
+      wet.connect(gain);
+      input.connect(delay);
+      delay.connect(echo);
+      echo.connect(gain);
+      delay.connect(feedback);
+      feedback.connect(delay);
+      gain.connect(pan);
+      pan.connect(compressor);
+      compressor.connect(this.ctx.destination);
+      compressor.ratio.value = 4;
+      compressor.knee.value = 18;
+      compressor.attack.value = 0.003;
+      compressor.release.value = 0.25;
+      this.previewBus = {
+        input,
+        gain,
+        pan,
+        wet,
+        echo,
+        delay,
+        compressor,
+        nodes: [input, gain, pan, wet, echo, delay, feedback, verb, compressor],
+      };
+    }
+    const b = this.previewBus;
+    b.gain.gain.value = t.volume;
+    b.pan.pan.value = t.pan;
+    b.wet.gain.value = t.reverb * 0.6;
+    b.echo.gain.value = t.echo;
+    b.delay.delayTime.value = (60 / this.project.bpm) * 0.75;
+    b.compressor.threshold.value = this.project.compressor;
+    return b.input;
+  }
+  cacheReconstruction(model: Reconstruction, samples = renderedSound(model)) {
     const buffer = this.ctx.createBuffer(1, samples.length, model.sampleRate);
     buffer.getChannelData(0).set(samples);
     this.reconstructedBuffers.set(model, buffer);
@@ -272,7 +350,7 @@ export class AudioEngine {
       const fullDuration = model.length / model.sampleRate / rate;
       duration = preview ? fullDuration : Math.min(duration, fullDuration);
       hold = Math.min(hold, Math.max(0.001, duration - 0.01));
-      if (preview) hold = Math.max(0.001, duration - 0.01);
+      if (preview) hold = Math.max(0.001, duration - Math.max(0.01, t.decay));
       source = s;
     } else if (t.wave === "noise") {
       const b = this.ctx.createBuffer(
@@ -307,7 +385,7 @@ export class AudioEngine {
     env.gain.exponentialRampToValueAtTime(0.0001, time + duration);
     source.connect(filter);
     filter.connect(env);
-    env.connect(preview ? this.ctx.destination : c.input);
+    env.connect(preview ? this.previewDestination(t) : c.input);
     if (preview) {
       this.previewStop?.();
       this.previewStop = () => {
@@ -333,10 +411,15 @@ export class AudioEngine {
       env.disconnect();
     };
   }
-  async preview(t: Track, pitch = 0) {
+  async preview(t: Track, pitch = 0, onlyStopped = false) {
+    if (onlyStopped && (this.playing || this.finishing)) return;
     const serial = ++this.previewSerial;
     await this.ctx.resume();
-    if (serial !== this.previewSerial) return;
+    if (
+      serial !== this.previewSerial ||
+      (onlyStopped && (this.playing || this.finishing))
+    )
+      return;
     this.note(t, pitch, this.ctx.currentTime + 0.02, 0.1, true);
   }
   async record() {

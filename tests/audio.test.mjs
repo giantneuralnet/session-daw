@@ -100,6 +100,51 @@ class Context {
   async close() {}
 }
 globalThis.AudioContext = Context;
+test("automatic previews are suppressed during playback and a pending resume cannot race transport", async () => {
+  const p = initialProject(),
+    e = new AudioEngine(p);
+  let heard = 0;
+  e.note = () => heard++;
+  e.playing = true;
+  await e.preview(p.tracks[0], 0, true);
+  assert.equal(heard, 0);
+  e.playing = false;
+  let resumed;
+  e.ctx.resume = () =>
+    new Promise((resolve) => {
+      resumed = resolve;
+    });
+  const pending = e.preview(p.tracks[0], 0, true);
+  e.playing = true;
+  resumed();
+  await pending;
+  assert.equal(heard, 0);
+  e.playing = false;
+  e.ctx.resume = async () => {};
+  await e.preview(p.tracks[0], 0, true);
+  assert.equal(heard, 1);
+});
+test("stopped sound previews include mixer and effects on a separate output bus", async () => {
+  const p = initialProject(),
+    e = new AudioEngine(p);
+  const t = {
+    ...p.tracks[2],
+    reverb: 0.8,
+    echo: 0.5,
+    pan: -0.4,
+    volume: 0.6,
+    mute: true,
+  };
+  await e.preview(t, 0, true);
+  assert.ok(e.previewBus);
+  assert.equal(e.previewBus.wet.gain.value, 0.48);
+  assert.equal(e.previewBus.echo.gain.value, 0.5);
+  assert.equal(e.previewBus.pan.pan.value, -0.4);
+  assert.equal(e.previewBus.gain.gain.value, 0.6);
+  assert.notEqual(e.previewBus.input, e.channels.get(t.id).input);
+  e.stop();
+  assert.equal(e.previewBus, undefined);
+});
 test("reconstructed instruments play from spectral data, transpose, obey note lengths and stop", () => {
   const p = initialProject(),
     t = p.tracks[2];

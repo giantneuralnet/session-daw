@@ -2122,6 +2122,15 @@ body {
 .sound-recorder .reconstruction-actions {
   grid-column: 1 / -1;
 }
+.construction-waves {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+}
+.construction-waves button {
+  text-transform: capitalize;
+  flex: 1;
+}
 .fft-window {
   grid-column: 1 / -1;
   min-width: 0;
@@ -2198,39 +2207,6 @@ body {
 }
 .fft-handle.end::before {
   right: 0;
-}
-.fft-handle i {
-  width: 8px;
-  height: 28px;
-  border-radius: 3px;
-  background: var(--track);
-}
-.fft-window-times {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding-top: 10px;
-  color: #9b9da8;
-  font-size: 11px;
-}
-.fft-window-times label {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.fft-window-times input {
-  width: 76px;
-  min-height: 36px;
-  border: 1px solid #3e404b;
-  border-radius: 4px;
-  padding: 6px;
-  color: #dedce7;
-  font-variant-numeric: tabular-nums;
-}
-.fft-window-times output {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
 }
 .capture-status,
 .capture-error {

@@ -13,7 +13,6 @@ import {
   Plus,
   FolderOpen,
   Download,
-  Headphones,
   SlidersHorizontal,
   AudioLines,
   Trash2,
@@ -30,6 +29,7 @@ import { History } from "../lib/history";
 import { pasteNotes } from "../lib/piano-roll";
 import { PianoRoll } from "./PianoRoll";
 import { SoundRecorder } from "./SoundRecorder";
+import { ReconstructedWaveform } from "./ReconstructedWaveform";
 import type { SoundCapture } from "../lib/sound-window";
 import { AudioEngine } from "../lib/audio";
 import {
@@ -181,6 +181,8 @@ export default function Session() {
     [shareStatus, setShareStatus] = useState("");
   const [previewStopRevision, setPreviewStopRevision] = useState(0);
   const captures = useRef(new Map<string, SoundCapture>());
+  const soundPreviewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const microphoneActive = useRef(false);
   const history = useRef(new History<Project>()),
     state = useRef(project),
     engine = useRef<AudioEngine | null>(null),
@@ -262,7 +264,7 @@ export default function Session() {
     state.current = next;
     setProject(next);
   }
-  function updateTrack(id: string, patch: Partial<Track>) {
+  function updateTrack(id: string, patch: Partial<Track>, audition = true) {
     edit(
       (p) => ({
         ...p,
@@ -270,7 +272,54 @@ export default function Session() {
       }),
       Object.keys(patch).some((key) => key !== "active"),
     );
+    if (
+      audition &&
+      Object.keys(patch).some((key) =>
+        [
+          "wave",
+          "frequency",
+          "attack",
+          "decay",
+          "cutoff",
+          "reverb",
+          "echo",
+          "pan",
+          "volume",
+          "kind",
+        ].includes(key),
+      )
+    )
+      scheduleSoundPreview(id);
   }
+  function scheduleSoundPreview(id: string) {
+    if (soundPreviewTimer.current) clearTimeout(soundPreviewTimer.current);
+    if (
+      playing ||
+      engine.current?.playing ||
+      engine.current?.finishing ||
+      microphoneActive.current
+    )
+      return;
+    const audio = getEngine();
+    void audio.ctx.resume().catch(() => {});
+    // Coalesce a slider gesture without creating hundreds of overlapping notes.
+    soundPreviewTimer.current = setTimeout(() => {
+      if (audio.playing || audio.finishing || microphoneActive.current) return;
+      const next = state.current.tracks.find((t) => t.id === id);
+      if (!next) return;
+      audio.update(state.current);
+      setPreviewStopRevision((v) => v + 1);
+      void audio
+        .preview(next, 0, true)
+        .catch(() => setMessage("Audio preview could not start."));
+    }, 90);
+  }
+  useEffect(
+    () => () => {
+      if (soundPreviewTimer.current) clearTimeout(soundPreviewTimer.current);
+    },
+    [selected, playing],
+  );
   function restoreHistory(direction: "undo" | "redo") {
     const next = history.current[direction](state.current);
     if (!next) return;
@@ -416,6 +465,7 @@ export default function Session() {
     }
   }
   function stop() {
+    if (soundPreviewTimer.current) clearTimeout(soundPreviewTimer.current);
     setPreviewStopRevision((v) => v + 1);
     engine.current?.stop();
     setPlaying(false);
@@ -1017,6 +1067,10 @@ export default function Session() {
               key={track.id}
               reconstruction={track.reconstruction}
               active={track.kind === "recorded"}
+              playing={playing}
+              onCaptureStatus={(capturing) => {
+                microphoneActive.current = capturing;
+              }}
               stopRevision={previewStopRevision}
               initialCapture={captures.current.get(track.id)}
               onCaptureChange={(capture) =>
@@ -1025,27 +1079,26 @@ export default function Session() {
               onCaptureStart={stop}
               onApply={(reconstruction, samples) => {
                 getEngine().cacheReconstruction(reconstruction, samples);
-                updateTrack(track.id, {
-                  kind: "recorded",
-                  reconstruction,
-                  frequency: reconstruction.referenceFrequency,
-                  attack: 0.005,
-                  decay: 0.1,
-                  cutoff: 18000,
-                });
+                updateTrack(
+                  track.id,
+                  {
+                    kind: "recorded",
+                    reconstruction,
+                    ...(track.kind === "recorded" && track.reconstruction
+                      ? {}
+                      : {
+                          frequency: reconstruction.referenceFrequency,
+                          attack: 0.005,
+                          decay: 0.1,
+                          cutoff: 18000,
+                        }),
+                  },
+                  false,
+                );
               }}
             />
             <div className="oscillator">
-              <div className="section-label">
-                OSCILLATOR{" "}
-                <button
-                  title="Preview sound"
-                  aria-label="Preview sound"
-                  onClick={() => void getEngine().preview(track)}
-                >
-                  <Headphones size={13} />
-                </button>
-              </div>
+              <div className="section-label">OSCILLATOR</div>
               <div className="wave-select">
                 {waves.map((w) => (
                   <button
@@ -1079,28 +1132,10 @@ export default function Session() {
               </div>
               <div className="wave-display">
                 {track.kind === "recorded" && track.reconstruction ? (
-                  <div
-                    className="recorded-spectrum"
-                    role="img"
-                    aria-label="Reconstructed frequency spectrum"
-                  >
-                    {(
-                      track.reconstruction.frames[
-                        Math.floor(track.reconstruction.frames.length / 2)
-                      ] ?? []
-                    )
-                      .slice(0, track.reconstruction.count)
-                      .map((p) => (
-                        <i
-                          key={p.frequency}
-                          style={{
-                            left: `${Math.max(0, (Math.log(p.frequency / 10) / Math.log(1200)) * 100)}%`,
-                            height: `${Math.min(90, Math.sqrt(p.amplitude) * 160)}%`,
-                            background: track.color,
-                          }}
-                        />
-                      ))}
-                  </div>
+                  <ReconstructedWaveform
+                    model={track.reconstruction}
+                    color={track.color}
+                  />
                 ) : (
                   <Waveform wave={track.wave} color={track.color} />
                 )}
@@ -1210,7 +1245,10 @@ export default function Session() {
                 max={0}
                 step={1}
                 display={`${project.compressor} dB`}
-                onChange={(compressor) => edit((p) => ({ ...p, compressor }))}
+                onChange={(compressor) => {
+                  edit((p) => ({ ...p, compressor }));
+                  scheduleSoundPreview(track.id);
+                }}
               />
             </div>
           </div>

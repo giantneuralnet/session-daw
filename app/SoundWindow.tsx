@@ -81,7 +81,6 @@ export function SoundWindow({
         : 1);
     drag.current = { pointer: e.pointerId, edge: chosen };
     area.current!.setPointerCapture(e.pointerId);
-    if (edge === undefined) update(chosen, position);
     e.preventDefault();
     e.stopPropagation();
   }
@@ -176,50 +175,10 @@ export function SoundWindow({
                             (e.shiftKey ? 0.1 : 0.01),
                   );
                 }}
-              >
-                <i />
-              </button>
+              />
             ))}
           </>
         )}
-      </div>
-      <div className="fft-window-times">
-        {([0, 1] as const).map((edge) => (
-          <label key={edge}>
-            {edge ? "End" : "Start"}
-            <input
-              aria-label={
-                edge ? "Selection end seconds" : "Selection start seconds"
-              }
-              type="number"
-              step="0.01"
-              min={edge ? (selection[0] + MIN_WINDOW) / SAMPLE_RATE : 0}
-              max={
-                edge
-                  ? length / SAMPLE_RATE
-                  : (selection[1] - MIN_WINDOW) / SAMPLE_RATE
-              }
-              disabled={!capture || disabled}
-              value={capture ? +(selection[edge] / SAMPLE_RATE).toFixed(3) : 0}
-              onChange={(e) => {
-                if (e.target.value !== "")
-                  update(edge, e.target.valueAsNumber * SAMPLE_RATE);
-              }}
-            />
-            s
-          </label>
-        ))}
-        <output>
-          {capture
-            ? `${((selection[1] - selection[0]) / SAMPLE_RATE).toFixed(3)} s selected`
-            : ""}
-        </output>
-        <button
-          disabled={!capture || disabled}
-          onClick={() => onChange([0, length])}
-        >
-          Full sound
-        </button>
       </div>
     </div>
   );

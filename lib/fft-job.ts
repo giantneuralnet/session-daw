@@ -2,17 +2,55 @@ import {
   analyzeSound,
   renderSound,
   type Reconstruction,
+  type ConstructionWave,
+  MAX_PARTIALS,
+  rememberRenderedSound,
 } from "./resynthesis.ts";
 export type FFTJob =
-  { samples: Float32Array; count: number } | { model: Reconstruction };
+  | { samples: Float32Array; count: number; wave?: ConstructionWave }
+  | { model: Reconstruction };
 export type FFTResult = { model: Reconstruction; samples: Float32Array };
 
 export function computeFFT(job: FFTJob): FFTResult {
   const model =
     "samples" in job
-      ? { ...analyzeSound(job.samples), count: job.count }
-      : job.model;
+      ? {
+          ...analyzeSound(job.samples),
+          count: job.count,
+          wave: job.wave ?? "sine",
+        }
+      : {
+          ...job.model,
+          count: Math.min(job.model.count, MAX_PARTIALS),
+          wave: job.model.wave ?? "sine",
+        };
+  if (
+    !Number.isInteger(model.count) ||
+    model.count < 1 ||
+    model.count > MAX_PARTIALS
+  )
+    throw Error("Choose between 1 and 32 waves.");
   return { model, samples: renderSound(model) };
+}
+
+const constructions = new WeakMap<object, Map<string, FFTResult>>();
+export async function cachedConstruction(
+  source: object,
+  key: string,
+  build: () => Promise<FFTResult>,
+): Promise<FFTResult> {
+  let cache = constructions.get(source);
+  if (!cache) {
+    cache = new Map();
+    constructions.set(source, cache);
+  }
+  const cached = cache.get(key);
+  if (cached) return cached;
+  const result = await build();
+  cache.set(key, result);
+  if (cache.size > 16) cache.delete(cache.keys().next().value!);
+  rememberRenderedSound(result.model, result.samples);
+  return result;
 }
 
 // A blocked worker can fall back locally without discarding the recording.
