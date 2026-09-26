@@ -2,6 +2,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Mic, Square, Play, AudioLines } from "lucide-react";
 import { MicrophoneRecording, microphoneError } from "../lib/microphone";
+import fftWorkerUrl from "../lib/resynthesis.worker?worker&url";
+import { runFFT } from "../lib/fft-job";
+import { selectedSound, type SoundCapture } from "../lib/sound-window";
+import { SoundWindow } from "./SoundWindow";
 import {
   MAX_PARTIALS,
   SAMPLE_RATE,
@@ -12,18 +16,24 @@ export function SoundRecorder({
   reconstruction,
   active,
   stopRevision,
+  initialCapture,
+  onCaptureChange,
   onApply,
   onCaptureStart,
 }: {
   reconstruction?: Reconstruction;
   active: boolean;
   stopRevision: number;
+  initialCapture?: SoundCapture;
+  onCaptureChange: (capture: SoundCapture) => void;
   onApply: (model: Reconstruction, samples: Float32Array) => void;
   onCaptureStart: () => void;
 }) {
   const [model, setModel] = useState(reconstruction);
   const [count, setCount] = useState(reconstruction?.count ?? 32);
-  const [original, setOriginal] = useState<Float32Array | null>(null);
+  const [capture, setCapture] = useState<SoundCapture | null>(
+    initialCapture ?? null,
+  );
   const [status, setStatus] = useState<
     "idle" | "permission" | "recording" | "analyzing" | "rendering"
   >("idle");
@@ -34,11 +44,10 @@ export function SoundRecorder({
     "original" | "reconstruction" | null
   >(null);
   const microphone = useRef<MicrophoneRecording | null>(null);
-  const worker = useRef<Worker | null>(null);
+  const job = useRef<AbortController | null>(null);
   const context = useRef<AudioContext | null>(null);
   const source = useRef<AudioBufferSourceNode | null>(null);
   const alive = useRef(true);
-  const accepted = useRef(reconstruction);
   const previewVersion = useRef(0);
   useEffect(() => {
     stopPreview();
@@ -46,15 +55,13 @@ export function SoundRecorder({
   useEffect(() => {
     setModel(reconstruction);
     setCount(reconstruction?.count ?? 32);
-    if (reconstruction !== accepted.current) setOriginal(null);
-    accepted.current = reconstruction;
   }, [reconstruction]);
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
       microphone.current?.dispose();
-      worker.current?.terminate();
+      job.current?.abort();
       source.current?.stop();
       void context.current?.close();
     };
@@ -104,27 +111,9 @@ export function SoundRecorder({
     };
     node.start();
   }
-  function compute(
-    data: { samples: Float32Array } | { model: Reconstruction },
-  ): Promise<{ model?: Reconstruction; samples?: Float32Array }> {
-    worker.current?.terminate();
-    const w = (worker.current = new Worker(
-      new URL("../lib/resynthesis.worker.ts", import.meta.url),
-      { type: "module" },
-    ));
-    return new Promise((resolve, reject) => {
-      w.onmessage = ({ data }) => {
-        w.terminate();
-        worker.current = null;
-        data.error ? reject(Error(data.error)) : resolve(data);
-      };
-      w.onerror = () => {
-        w.terminate();
-        worker.current = null;
-        reject(Error("Could not analyze this sound. Try recording again."));
-      };
-      w.postMessage(data);
-    });
+  function rememberCapture(next: SoundCapture) {
+    setCapture(next);
+    onCaptureChange(next);
   }
   async function startRecording() {
     stopPreview();
@@ -146,23 +135,13 @@ export function SoundRecorder({
         setStatus("idle");
       }
     };
-    mic.onComplete = async (samples) => {
+    mic.onComplete = (samples) => {
       if (!alive.current) return;
-      setStatus("analyzing");
+      // Preserve the full recording immediately, independently of FFT startup.
+      rememberCapture({ samples, window: [0, samples.length] });
+      setElapsed(samples.length / SAMPLE_RATE);
       setPeak(0);
-      try {
-        const result = await compute({ samples });
-        if (alive.current) {
-          setOriginal(result.samples ?? samples);
-          setModel(result.model);
-          setStatus("idle");
-        }
-      } catch (error) {
-        if (alive.current) {
-          setError(microphoneError(error));
-          setStatus("idle");
-        }
-      }
+      setStatus("idle");
     };
     try {
       await mic.start();
@@ -176,24 +155,45 @@ export function SoundRecorder({
     }
   }
   async function reconstruct(apply: boolean) {
-    if (!model) return;
+    const sourceModel = reconstruction ?? model;
+    if (!capture && !sourceModel) return;
     stopPreview();
+    const previewId = previewVersion.current;
     setError("");
-    setStatus("rendering");
+    setStatus(apply && capture ? "analyzing" : "rendering");
+    job.current?.abort();
+    const controller = (job.current = new AbortController());
     try {
-      // Unlock output during the tap, before waiting for the worker.
       await audioContext();
       if (!alive.current) return;
-      const next = { ...model, count: apply ? count : model.count };
-      const { samples } = await compute({ model: next });
-      if (!alive.current || !samples) return;
+      const request =
+        apply && capture
+          ? { samples: selectedSound(capture), count }
+          : {
+              model: {
+                ...sourceModel!,
+                count: apply ? count : sourceModel!.count,
+              },
+            };
+      const result = await runFFT(
+        request,
+        () => new Worker(fftWorkerUrl, { type: "module" }),
+        controller.signal,
+      );
+      if (!alive.current || controller.signal.aborted) return;
       if (apply) {
-        accepted.current = next;
-        setModel(next);
-        onApply(next, samples);
+        setModel(result.model);
+        if (capture)
+          rememberCapture({
+            ...capture,
+            appliedModel: result.model,
+            appliedWindow: [...capture.window],
+          });
+        onApply(result.model, result.samples);
       }
       setStatus("idle");
-      await preview(samples, "reconstruction");
+      if (previewId === previewVersion.current)
+        await preview(result.samples, "reconstruction");
     } catch (error) {
       if (alive.current) {
         setError(microphoneError(error));
@@ -202,11 +202,18 @@ export function SoundRecorder({
     }
   }
   const busy = status !== "idle";
-  const applied = active && !!model && model === reconstruction;
+  const applied =
+    active &&
+    !!model &&
+    model === reconstruction &&
+    (!capture ||
+      (capture.appliedModel === model &&
+        capture.window[0] === capture.appliedWindow?.[0] &&
+        capture.window[1] === capture.appliedWindow?.[1]));
   return (
     <div className="sound-recorder">
       <div className="section-label">
-        RECORD A SOUND{" "}
+        FFT{" "}
         <span>
           {applied && model
             ? `${model.count} frequencies · in use`
@@ -230,7 +237,7 @@ export function SoundRecorder({
           )}
           {status === "recording"
             ? "Stop"
-            : original
+            : capture
               ? "Record again"
               : "Record sound"}
         </button>
@@ -246,6 +253,16 @@ export function SoundRecorder({
         </div>
         <output>{elapsed.toFixed(1)} s</output>
       </div>
+      <SoundWindow
+        capture={capture}
+        disabled={busy}
+        onChange={(window) => {
+          if (!capture) return;
+          stopPreview();
+          setError("");
+          rememberCapture({ ...capture, window });
+        }}
+      />
       <label className="control frequency-count">
         <span>
           Frequencies <output>{count}</output>
@@ -276,19 +293,19 @@ export function SoundRecorder({
       <div className="reconstruction-actions">
         <button
           className="reconstruct-button"
-          disabled={!model || busy}
+          disabled={(!model && !capture) || busy}
           onClick={() => void reconstruct(true)}
         >
           <AudioLines size={15} />
           Reconstruct
         </button>
         <button
-          disabled={!original || busy}
+          disabled={!capture || busy}
           aria-pressed={audition === "original"}
           onClick={() => {
             if (audition === "original") stopPreview();
-            else if (original)
-              void preview(original, "original").catch((e) =>
+            else if (capture)
+              void preview(selectedSound(capture), "original").catch((e) =>
                 setError(microphoneError(e)),
               );
           }}
@@ -297,7 +314,7 @@ export function SoundRecorder({
           Original
         </button>
         <button
-          disabled={!applied || busy}
+          disabled={!active || !reconstruction || busy}
           aria-pressed={audition === "reconstruction"}
           onClick={() =>
             audition === "reconstruction"
@@ -322,7 +339,7 @@ export function SoundRecorder({
               ? "Analyzing sound…"
               : status === "rendering"
                 ? "Reconstructing…"
-                : model && (!applied || count !== model.count)
+                : (capture || model) && (!applied || count !== model?.count)
                   ? "Reconstruct to hear and use this sound."
                   : model
                     ? `${(model.length / SAMPLE_RATE).toFixed(1)} s · ${model.count} frequencies per frame`

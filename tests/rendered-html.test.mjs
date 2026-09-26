@@ -32,6 +32,10 @@ test("production server renders the session controls without starter content", a
   assert.match(html, /Reconstruction frequencies/);
   assert.match(html, /Reconstruct/);
   assert.match(html, /5 seconds max/);
+  assert.match(html, /FFT/);
+  assert.match(html, /Selection start seconds/);
+  assert.match(html, /Selection end seconds/);
+  assert.match(html, /Full sound/);
   assert.doesNotMatch(
     html,
     /Session name|Track name|master-strip|Four on the floor/,

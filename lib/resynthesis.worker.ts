@@ -1,22 +1,14 @@
-import { analyzeSound, renderSound, trimSound } from "./resynthesis";
+import { computeFFT } from "./fft-job";
 self.onmessage = ({ data }) => {
   try {
-    if (data.samples) {
-      const samples = trimSound(data.samples);
-      self.postMessage(
-        { model: analyzeSound(samples), samples },
-        { transfer: [samples.buffer] },
-      );
-    } else {
-      const samples = renderSound(data.model);
-      self.postMessage({ samples }, { transfer: [samples.buffer] });
-    }
+    const result = computeFFT(data);
+    self.postMessage(result, { transfer: [result.samples.buffer] });
   } catch (error) {
     self.postMessage({
       error:
         error instanceof Error
           ? error.message
-          : "Could not reconstruct this sound.",
+          : "Could not reconstruct this selection.",
     });
   }
 };

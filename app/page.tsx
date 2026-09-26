@@ -30,6 +30,7 @@ import { History } from "../lib/history";
 import { pasteNotes } from "../lib/piano-roll";
 import { PianoRoll } from "./PianoRoll";
 import { SoundRecorder } from "./SoundRecorder";
+import type { SoundCapture } from "../lib/sound-window";
 import { AudioEngine } from "../lib/audio";
 import {
   initialProject,
@@ -179,6 +180,7 @@ export default function Session() {
     [sharing, setSharing] = useState(false),
     [shareStatus, setShareStatus] = useState("");
   const [previewStopRevision, setPreviewStopRevision] = useState(0);
+  const captures = useRef(new Map<string, SoundCapture>());
   const history = useRef(new History<Project>()),
     state = useRef(project),
     engine = useRef<AudioEngine | null>(null),
@@ -1016,6 +1018,10 @@ export default function Session() {
               reconstruction={track.reconstruction}
               active={track.kind === "recorded"}
               stopRevision={previewStopRevision}
+              initialCapture={captures.current.get(track.id)}
+              onCaptureChange={(capture) =>
+                captures.current.set(track.id, capture)
+              }
               onCaptureStart={stop}
               onApply={(reconstruction, samples) => {
                 getEngine().cacheReconstruction(reconstruction, samples);
