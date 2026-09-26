@@ -55,6 +55,13 @@ export const colors = [
   "#d2c276",
 ];
 export const columnLabel = (i: number) => String.fromCharCode(65 + i);
+export function nextColumnName(tracks: Pick<Track, "name">[]) {
+  const used = new Set(tracks.map((t) => t.name));
+  for (let i = 0; i < 26; i++)
+    if (!used.has(columnLabel(i))) return columnLabel(i);
+  // Sessions allow at most 16 instruments, so a letter is always available.
+  throw Error("No available instrument letter.");
+}
 const pattern = (steps: number[], pitches: number[] = []) =>
   steps.map((start, i) => ({
     id: `n-${i}`,

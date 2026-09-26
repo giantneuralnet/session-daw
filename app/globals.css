@@ -2437,3 +2437,62 @@ footer {
     margin: 0;
   }
 }
+.project-dialog {
+  width: 360px;
+  max-width: 100%;
+  padding: 24px;
+  background: #202126;
+  border: 1px solid #444650;
+  border-radius: 10px;
+  box-shadow: 0 30px 80px #0007;
+}
+.project-dialog > p {
+  margin: 22px 0;
+  color: #aaa8b3;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.project-name-field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+  font-size: 12px;
+  color: #aaa8b3;
+}
+.project-name-field input {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  background: #17181d;
+  border: 1px solid #54505f;
+  border-radius: 5px;
+  color: #e1deea;
+  font-size: 15px;
+}
+.project-file-size {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 16px 0 24px;
+  color: #aaa8b3;
+  font-size: 12px;
+}
+.project-file-size output {
+  font-family: monospace;
+  color: #d0cadb;
+}
+@media (max-width: 650px) {
+  .tempo {
+    gap: 4px;
+    padding: 0 5px;
+  }
+  .tempo b {
+    font-size: 12px;
+    min-width: 0;
+  }
+  .tempo span {
+    font-size: 9px;
+  }
+}

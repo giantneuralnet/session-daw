@@ -24,9 +24,15 @@ test("production server renders the session controls without starter content", a
     /<header class="transport">([\s\S]*?)<\/header>/,
   )[1];
   assert.match(toolbar, /<span>BPM<\/span>/);
+  assert.match(toolbar, /<b>120<\/b>/);
+  const newButton = toolbar.match(
+    /<button[^>]*aria-label="New empty session"[^>]*>([\s\S]*?)<\/button>/,
+  )[1];
+  assert.match(newButton, /lucide-file/);
+  assert.doesNotMatch(newButton, /lucide-plus/);
   assert.doesNotMatch(
     toolbar,
-    /<b>120<|class="position"|class="beat-dots"|class="signature"/,
+    /class="position"|class="beat-dots"|class="signature"/,
   );
   assert.match(html, /Set A4, 440 Hz/);
   assert.match(html, /Set C4, 261.63 Hz/);

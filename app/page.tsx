@@ -1,5 +1,11 @@
 "use client";
-import { useState, useRef, useEffect, type CSSProperties } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+  type CSSProperties,
+} from "react";
 import {
   Play,
   ArrowDown,
@@ -12,6 +18,7 @@ import {
   Circle,
   Plus,
   FolderOpen,
+  File,
   Download,
   SlidersHorizontal,
   AudioLines,
@@ -27,6 +34,8 @@ import { noteShortcuts, parseBpm, stepBpm } from "../lib/music";
 import { soundPresets } from "../lib/presets";
 import { History } from "../lib/history";
 import { pasteNotes } from "../lib/piano-roll";
+import { sessionFile } from "../lib/session-file";
+import { ProjectDialog } from "./ProjectDialog";
 import { PianoRoll } from "./PianoRoll";
 import { SoundRecorder } from "./SoundRecorder";
 import { ReconstructedWaveform } from "./ReconstructedWaveform";
@@ -38,7 +47,7 @@ import {
   initialProject,
   emptyProject,
   ensureEmptyRow,
-  columnLabel,
+  nextColumnName,
   signatureOf,
   stepsPerBar,
   type TimeSignature,
@@ -184,6 +193,14 @@ export default function Session() {
     [bpmError, setBpmError] = useState(""),
     [sharing, setSharing] = useState(false),
     [shareStatus, setShareStatus] = useState("");
+  const [projectDialog, setProjectDialog] = useState<"new" | "save" | null>(
+    null,
+  );
+  const [saveName, setSaveName] = useState("Session");
+  const preparedFile = useMemo(
+    () => (projectDialog === "save" ? sessionFile(project, saveName) : null),
+    [projectDialog, project, saveName],
+  );
   const [signatureDraft, setSignatureDraft] = useState<TimeSignature>([4, 4]);
   const [patternSelection, setPatternSelection] = useState(0);
   const [previewStopRevision, setPreviewStopRevision] = useState(0);
@@ -199,7 +216,14 @@ export default function Session() {
   const busyState = useRef(false);
   const viewState = useRef({ selected, clipIndex, tab });
   viewState.current = { selected, clipIndex, tab };
-  busyState.current = playing || recording || finishing || encoding || !!take;
+  busyState.current =
+    playing ||
+    recording ||
+    finishing ||
+    encoding ||
+    !!take ||
+    !!projectDialog ||
+    showTempo;
   const captures = useRef(new Map<string, SoundCapture>());
   const soundPreviewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const microphoneActive = useRef(false);
@@ -595,6 +619,7 @@ export default function Session() {
   }
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (projectDialog) return;
       if (showTempo) {
         if (e.key === "Escape") {
           e.preventDefault();
@@ -682,6 +707,8 @@ export default function Session() {
     launch(t, playing && (queued[t.id] ?? t.active) === index ? -1 : index);
   }
   function startFresh() {
+    if (recording || finishing || encoding) return;
+    setProjectDialog(null);
     stop(true);
     engine.current?.dispose();
     engine.current = null;
@@ -736,13 +763,11 @@ export default function Session() {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
   function save() {
+    if (!preparedFile) return;
+    edit((p) => ({ ...p, name: preparedFile.name }));
     void flushRecovery();
-    download(
-      new Blob([JSON.stringify(state.current, null, 2)], {
-        type: "application/json",
-      }),
-      `${project.name}.json`,
-    );
+    download(preparedFile.blob, preparedFile.filename);
+    setProjectDialog(null);
     setMessage("Session saved as JSON");
   }
   async function load(f?: File) {
@@ -770,7 +795,10 @@ export default function Session() {
       setMessage("A session supports up to 16 tracks");
       return;
     }
-    const t = makeTrack(project.tracks.length, project.tracks[0].clips.length);
+    const t = {
+      ...makeTrack(project.tracks.length, project.tracks[0].clips.length),
+      name: nextColumnName(project.tracks),
+    };
     edit((p) => ({ ...p, tracks: [...p.tracks, t] }));
     setSelected(t.id);
     setClipIndex(0);
@@ -779,6 +807,7 @@ export default function Session() {
     if (project.tracks.length >= 16) return;
     const copy = {
       ...structuredClone(source),
+      name: nextColumnName(project.tracks),
       id: crypto.randomUUID(),
       active: -1,
     };
@@ -794,7 +823,7 @@ export default function Session() {
       tracks.splice(tracks.findIndex((t) => t.id === source.id) + 1, 0, copy);
       return {
         ...p,
-        tracks: tracks.map((t, i) => ({ ...t, name: columnLabel(i) })),
+        tracks,
       };
     });
     setSelected(copy.id);
@@ -804,7 +833,7 @@ export default function Session() {
     const next = project.tracks.filter((t) => t.id !== source.id);
     edit((p) => ({
       ...p,
-      tracks: next.map((t, i) => ({ ...t, name: columnLabel(i) })),
+      tracks: next,
     }));
     if (selected === source.id) setSelected(next[0].id);
   }
@@ -860,6 +889,7 @@ export default function Session() {
               setShowTempo(true);
             }}
           >
+            <b>{project.bpm}</b>
             <span>BPM</span>
           </button>
         </div>
@@ -883,12 +913,12 @@ export default function Session() {
             </button>
           </div>
           <button
-            onClick={startFresh}
-            disabled={recording || encoding}
+            onClick={() => setProjectDialog("new")}
+            disabled={recording || finishing || encoding}
             title="New empty session"
             aria-label="New empty session"
           >
-            <Plus size={15} />
+            <File size={15} />
             <span>New</span>
           </button>
           <button
@@ -899,7 +929,14 @@ export default function Session() {
             <FolderOpen size={15} />
             <span>Open</span>
           </button>
-          <button aria-label="Save" title="Save" onClick={save}>
+          <button
+            aria-label="Save"
+            title="Save"
+            onClick={() => {
+              setSaveName(project.name);
+              setProjectDialog("save");
+            }}
+          >
             <Download size={15} />
             <span>Save</span>
           </button>
@@ -944,7 +981,7 @@ export default function Session() {
                 </button>
               ))}
             </div>
-            {project.tracks.map((t, i) => (
+            {project.tracks.map((t) => (
               <div
                 key={t.id}
                 className={`track ${t.id === track.id ? "selected" : ""}`}
@@ -953,13 +990,13 @@ export default function Session() {
                 <div className="instrument-header">
                   <button
                     className="instrument-letter"
-                    aria-label={`Select instrument ${columnLabel(i)}`}
+                    aria-label={`Select instrument ${t.name}`}
                     onClick={() => setSelected(t.id)}
                   >
-                    {columnLabel(i)}
+                    {t.name}
                   </button>
                   <button
-                    aria-label={`Duplicate instrument ${columnLabel(i)}`}
+                    aria-label={`Duplicate instrument ${t.name}`}
                     title="Duplicate instrument"
                     disabled={project.tracks.length >= 16}
                     onClick={() => duplicateTrack(t)}
@@ -967,7 +1004,7 @@ export default function Session() {
                     <Copy size={13} />
                   </button>
                   <button
-                    aria-label={`Delete instrument ${columnLabel(i)}`}
+                    aria-label={`Delete instrument ${t.name}`}
                     title="Delete instrument"
                     disabled={project.tracks.length === 1}
                     onClick={() => deleteTrack(t)}
@@ -983,13 +1020,13 @@ export default function Session() {
                     >
                       <button
                         className="clip-edit"
-                        aria-label={`${c?.notes.length ? (playing && (queued[t.id] ?? t.active) === j ? "Stop" : "Play") : "Create"} ${columnLabel(i)}${j + 1} and edit`}
+                        aria-label={`${c?.notes.length ? (playing && (queued[t.id] ?? t.active) === j ? "Stop" : "Play") : "Create"} ${t.name}${j + 1} and edit`}
                         aria-pressed={!!c && playing && t.active === j}
                         onClick={() => launchClip(t, j)}
                       >
                         {!!c?.notes.length && (
                           <span className="clip-coordinate">
-                            {columnLabel(i)}
+                            {t.name}
                             {j + 1}
                           </span>
                         )}
@@ -1015,8 +1052,8 @@ export default function Session() {
                       {!!c?.notes.length && (
                         <button
                           className="clip-launch"
-                          title={`${playing && (queued[t.id] ?? t.active) === j ? "Stop" : "Play"} ${columnLabel(i)}${j + 1}`}
-                          aria-label={`${playing && (queued[t.id] ?? t.active) === j ? "Stop" : "Play"} ${columnLabel(i)}${j + 1}`}
+                          title={`${playing && (queued[t.id] ?? t.active) === j ? "Stop" : "Play"} ${t.name}${j + 1}`}
+                          aria-label={`${playing && (queued[t.id] ?? t.active) === j ? "Stop" : "Play"} ${t.name}${j + 1}`}
                           onClick={() => launchClip(t, j)}
                         >
                           {playing && t.active === j ? (
@@ -1139,7 +1176,7 @@ export default function Session() {
           <div className="device-name">
             <i style={{ background: track.color }} />
             <span className="device-coordinate">
-              {columnLabel(project.tracks.indexOf(track))}
+              {track.name}
               {tab === "pattern" ? clipIndex + 1 : ""}
             </span>
           </div>
@@ -1434,6 +1471,16 @@ export default function Session() {
           <Check size={14} />
           {message}
         </div>
+      )}
+      {projectDialog && (
+        <ProjectDialog
+          mode={projectDialog}
+          name={saveName}
+          size={preparedFile?.blob.size ?? 0}
+          onName={setSaveName}
+          onCancel={() => setProjectDialog(null)}
+          onConfirm={projectDialog === "new" ? startFresh : save}
+        />
       )}
       {showTempo && (
         <div className="modal-backdrop" onClick={closeTempo}>
