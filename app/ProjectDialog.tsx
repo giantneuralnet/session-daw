@@ -77,8 +77,7 @@ export function ProjectDialog({
         </div>
         {mode === "new" ? (
           <p id="new-project-warning">
-            Start fresh? Your current project will be replaced. Save it first if
-            you want to keep a file.
+            Warning, the current project will be cleared
           </p>
         ) : (
           <>
