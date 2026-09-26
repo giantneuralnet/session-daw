@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Mic, Square, Play } from "lucide-react";
 import { MicrophoneRecording, microphoneError } from "../lib/microphone";
+import { prepareAudioPlayback } from "../lib/audio-session";
 import fftWorkerUrl from "../lib/resynthesis.worker?worker&url";
 import { runFFT, cachedConstruction } from "../lib/fft-job";
 import { selectedSound, type SoundCapture } from "../lib/sound-window";
@@ -107,6 +108,7 @@ export function SoundRecorder({
     setAudition(null);
   }
   async function audioContext() {
+    prepareAudioPlayback();
     if (!context.current) context.current = new AudioContext();
     await context.current.resume();
     return context.current;
@@ -193,9 +195,9 @@ export function SoundRecorder({
       }
     }
   }
-  async function playConstruction() {
+  async function playConstruction(selectedWave = wave, audition = true) {
     const sourceModel = reconstruction ?? model;
-    if ((!capture && !sourceModel) || playingNow.current) return;
+    if ((!capture && !sourceModel) || (audition && playingNow.current)) return;
     stopPreview();
     const previewId = previewVersion.current;
     setError("");
@@ -203,15 +205,15 @@ export function SoundRecorder({
     job.current?.abort();
     const controller = (job.current = new AbortController());
     try {
-      await audioContext();
+      if (!playingNow.current) await audioContext();
       if (!alive.current) return;
       const source = capture ? capture.samples : sourceModel!.frames;
-      const key = `${capture ? capture.window.join(":") : "full"}:${count}:${wave}`;
+      const key = `${capture ? capture.window.join(":") : "full"}:${count}:${selectedWave}`;
       const result = await cachedConstruction(source, key, () =>
         runFFT(
           capture
-            ? { samples: selectedSound(capture), count, wave }
-            : { model: { ...sourceModel!, count, wave } },
+            ? { samples: selectedSound(capture), count, wave: selectedWave }
+            : { model: { ...sourceModel!, count, wave: selectedWave } },
           () => new Worker(fftWorkerUrl, { type: "module" }),
           controller.signal,
         ),
@@ -221,13 +223,15 @@ export function SoundRecorder({
       if (capture)
         rememberCapture({
           ...capture,
+          count,
+          wave: selectedWave,
           appliedModel: result.model,
           appliedWindow: [...capture.window],
         });
       if (result.model !== reconstruction || !active)
         onApply(result.model, result.samples);
       setStatus("idle");
-      if (previewId === previewVersion.current)
+      if (!playingNow.current && previewId === previewVersion.current)
         await preview(result.samples, "reconstruction");
     } catch (error) {
       if (alive.current) {
@@ -320,6 +324,10 @@ export function SoundRecorder({
             onClick={() => {
               stopPreview();
               setWave(shape);
+              // Stored FFT frequencies, amplitudes and phases are sufficient;
+              // a raw microphone take is optional when changing the wave shape.
+              if (capture || reconstruction || model)
+                void playConstruction(shape, false);
             }}
           >
             {shape}

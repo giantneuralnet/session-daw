@@ -1,4 +1,5 @@
 import { MAX_SECONDS, SAMPLE_RATE } from "./resynthesis.ts";
+import { beginMicrophoneSession } from "./audio-session.ts";
 
 export class MicrophoneRecording {
   private context?: AudioContext;
@@ -12,6 +13,8 @@ export class MicrophoneRecording {
   private peak = 0;
   private cancelled = false;
   private finished = false;
+  private endSession?: () => void;
+  private closing?: Promise<void>;
   onProgress: (seconds: number, peak: number) => void = () => {};
   onComplete: (samples: Float32Array) => void = () => {};
   onError: (message: string) => void = () => {};
@@ -19,67 +22,77 @@ export class MicrophoneRecording {
   async start() {
     if (!navigator.mediaDevices?.getUserMedia)
       throw Error("Microphone recording is unavailable in this browser.");
-    const ctx = (this.context = new AudioContext());
-    await ctx.resume();
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-      },
-    });
-    if (this.cancelled) {
-      stream.getTracks().forEach((t) => t.stop());
-      return;
-    }
-    this.stream = stream;
-    await ctx.audioWorklet.addModule("/audio/microphone.js");
-    if (this.cancelled) return;
-    this.worklet = new AudioWorkletNode(ctx, "instrument-microphone");
-    this.source = ctx.createMediaStreamSource(stream);
-    this.worklet.port.onmessage = ({ data }) => {
-      if (this.cancelled || this.finished) return;
-      if (data.done) {
-        void this.finish();
+    this.endSession = beginMicrophoneSession();
+    try {
+      const ctx = (this.context = new AudioContext());
+      await ctx.resume();
+      if (this.cancelled) return;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
+      if (this.cancelled) {
+        stream.getTracks().forEach((t) => t.stop());
+        await this.release();
         return;
       }
-      const chunk = data.samples as Float32Array;
-      this.chunks.push(chunk);
-      this.length += chunk.length;
-      let peak = 0;
-      for (const sample of chunk) peak = Math.max(peak, Math.abs(sample));
-      this.peak = Math.max(this.peak, peak);
-      if (this.length - this.reported >= ctx.sampleRate / 20) {
-        this.onProgress(this.length / ctx.sampleRate, this.peak);
-        this.reported = this.length;
-        this.peak = 0;
-      }
-    };
-    this.source.connect(this.worklet);
-    this.worklet.connect(ctx.destination);
-    this.timer = setTimeout(() => this.stop(), MAX_SECONDS * 1000 + 100);
-    stream
-      .getAudioTracks()
-      .forEach((t) =>
-        t.addEventListener("ended", () => this.stop(), { once: true }),
-      );
+      this.stream = stream;
+      await ctx.audioWorklet.addModule("/audio/microphone.js");
+      if (this.cancelled) return;
+      this.worklet = new AudioWorkletNode(ctx, "instrument-microphone");
+      this.source = ctx.createMediaStreamSource(stream);
+      this.worklet.port.onmessage = ({ data }) => {
+        if (this.cancelled || this.finished) return;
+        if (data.done) {
+          void this.finish();
+          return;
+        }
+        const chunk = data.samples as Float32Array;
+        this.chunks.push(chunk);
+        this.length += chunk.length;
+        let peak = 0;
+        for (const sample of chunk) peak = Math.max(peak, Math.abs(sample));
+        this.peak = Math.max(this.peak, peak);
+        if (this.length - this.reported >= ctx.sampleRate / 20) {
+          this.onProgress(this.length / ctx.sampleRate, this.peak);
+          this.reported = this.length;
+          this.peak = 0;
+        }
+      };
+      this.source.connect(this.worklet);
+      this.worklet.connect(ctx.destination);
+      this.timer = setTimeout(() => this.stop(), MAX_SECONDS * 1000 + 100);
+      stream
+        .getAudioTracks()
+        .forEach((t) =>
+          t.addEventListener("ended", () => this.stop(), { once: true }),
+        );
+    } catch (error) {
+      await this.release();
+      throw error;
+    }
   }
   stop() {
     this.worklet?.port.postMessage("stop");
   }
-  private release() {
+  private async release() {
     clearTimeout(this.timer);
     this.stream?.getTracks().forEach((t) => t.stop());
     this.source?.disconnect();
     this.worklet?.disconnect();
-    if (this.context && this.context.state !== "closed")
-      void this.context.close();
+    if (!this.closing && this.context && this.context.state !== "closed")
+      this.closing = this.context.close().catch(() => {});
+    await this.closing;
+    this.endSession?.();
   }
   private async finish() {
     this.finished = true;
     const rate = this.context!.sampleRate;
-    this.release();
+    await this.release();
     try {
       if (this.length < rate * 0.08)
         throw Error("Record a sound for at least 0.1 seconds.");
@@ -118,7 +131,7 @@ export class MicrophoneRecording {
   }
   dispose() {
     this.cancelled = true;
-    this.release();
+    void this.release();
     this.chunks = [];
   }
 }

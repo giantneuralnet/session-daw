@@ -133,3 +133,25 @@ test("worker results use the same reconstruction and cancellation prevents late 
     /No sound detected/,
   );
 });
+
+test("JSON-only instruments change reconstruction shape without their original recording", () => {
+  const original = computeFFT({ samples: recording, count: 8, wave: "sine" });
+  const stored = JSON.parse(JSON.stringify(original.model));
+  assert.equal(stored.samples, undefined);
+  for (const wave of ["triangle", "square", "sine"]) {
+    const rebuilt = computeFFT({ model: { ...stored, wave } });
+    assert.equal(rebuilt.model.wave, wave);
+    assert.deepEqual(rebuilt.model.frames, stored.frames);
+    assert.equal(rebuilt.model.referenceFrequency, stored.referenceFrequency);
+    assert.equal(rebuilt.samples.length, original.samples.length);
+    assert.ok(rebuilt.samples.every(Number.isFinite));
+    assert.ok(rebuilt.samples.some((value) => Math.abs(value) > 0.1));
+    if (wave === "sine") assert.deepEqual(rebuilt.samples, original.samples);
+    else assert.notDeepEqual(rebuilt.samples, original.samples);
+  }
+  assert.equal(
+    stored.wave,
+    "sine",
+    "original model remains available for undo",
+  );
+});

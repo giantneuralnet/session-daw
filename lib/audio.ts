@@ -1,4 +1,5 @@
 import { TailMonitor } from "./tail-monitor.ts";
+import { prepareAudioPlayback } from "./audio-session.ts";
 import { renderedSound, type Reconstruction } from "./resynthesis.ts";
 import type { Project, Track } from "./session";
 type Channel = {
@@ -52,6 +53,7 @@ export class AudioEngine {
   onError: (message: string) => void = () => {};
   constructor(project: Project) {
     this.project = project;
+    prepareAudioPlayback();
     this.ctx = new AudioContext();
     this.master = this.ctx.createGain();
     this.compressor = this.ctx.createDynamicsCompressor();
@@ -148,6 +150,7 @@ export class AudioEngine {
     }
   }
   async start() {
+    prepareAudioPlayback();
     await this.ctx.resume();
     if (this.playing || this.finishing) return;
     this.clearPreview();
@@ -414,6 +417,7 @@ export class AudioEngine {
   async preview(t: Track, pitch = 0, onlyStopped = false) {
     if (onlyStopped && (this.playing || this.finishing)) return;
     const serial = ++this.previewSerial;
+    prepareAudioPlayback();
     await this.ctx.resume();
     if (
       serial !== this.previewSerial ||
@@ -424,6 +428,7 @@ export class AudioEngine {
   }
   async record() {
     if (this.recording || this.finishing) return;
+    prepareAudioPlayback();
     await this.ctx.resume();
     if (!this.recorder) {
       await this.ctx.audioWorklet.addModule("/audio/recorder.js");
