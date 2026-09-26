@@ -1874,3 +1874,148 @@ footer {
     padding: 0;
   }
 }
+html,
+body {
+  touch-action: pan-x pan-y;
+}
+.piano-scroll {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.piano-roll {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.pitch-viewport {
+  width: 100%;
+  scrollbar-gutter: stable;
+}
+.piano-body {
+  width: 100%;
+  min-width: 0;
+}
+.note-grid {
+  min-width: 0;
+}
+.piano-keys {
+  width: 32px;
+}
+.piano-keys button {
+  font-size: 8px;
+  padding-right: 4px;
+}
+.piano-ruler {
+  grid-template-columns: 32px repeat(16, minmax(0, 1fr));
+  width: 100%;
+  padding-right: 0;
+}
+.piano-ruler > span {
+  min-width: 0;
+  padding-left: 3px;
+}
+.tempo {
+  border-radius: 4px;
+  height: 36px;
+}
+.tempo b {
+  font: 600 14px monospace;
+  min-width: 34px;
+}
+.tempo-dialog {
+  width: 340px;
+  max-width: 100%;
+  padding: 24px;
+  background: #202126;
+  border: 1px solid #444650;
+  border-radius: 10px;
+  box-shadow: 0 30px 80px #0007;
+}
+.tempo-field {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  margin: 24px 0 20px;
+}
+.tempo-field input {
+  width: 135px;
+  text-align: center;
+  font: 32px monospace;
+  border: 1px solid #54505f;
+  border-radius: 5px;
+  background: #17181d;
+  padding: 10px 5px;
+}
+.tempo-field span {
+  font-size: 11px;
+  color: #96929f;
+}
+.tempo-steps {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+.tempo-steps button {
+  flex: 1;
+  min-height: 40px;
+  background: #2b2c33;
+  border: 1px solid #494652;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.tempo-error {
+  font-size: 11px;
+  color: #ec929e;
+  margin: -8px 0 16px;
+}
+.note-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+  gap: 4px;
+  margin-top: 7px;
+}
+.note-shortcuts button {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 38px;
+  padding: 5px 3px;
+  border: 1px solid #393b45;
+  border-radius: 3px;
+}
+.note-shortcuts b {
+  font: 10px monospace;
+  font-weight: 500;
+}
+.note-shortcuts span {
+  font: 8px monospace;
+  color: #93909e;
+}
+.note-shortcuts button[aria-pressed="true"] {
+  color: var(--track);
+  border-color: var(--track);
+  background: color-mix(in srgb, var(--track) 12%, transparent);
+}
+@media (max-width: 650px) {
+  .piano-roll {
+    min-width: 0;
+  }
+  .note-resize {
+    width: 6px;
+  }
+  .piano-note {
+    padding: 3px 1px;
+  }
+  .tempo {
+    padding: 0 10px;
+  }
+}
+.record-dialog .share-status {
+  margin: 14px 0 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: #b5adc8;
+}

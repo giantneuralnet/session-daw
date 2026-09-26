@@ -7,6 +7,7 @@ import {
   Undo2,
   Redo2,
   ClipboardPaste,
+  Share2,
   Square,
   Circle,
   Plus,
@@ -22,6 +23,8 @@ import {
   Power,
   Music2,
 } from "lucide-react";
+import { shareAudio } from "../lib/sharing";
+import { noteShortcuts, parseBpm, stepBpm } from "../lib/music";
 import { soundPresets } from "../lib/presets";
 import { History } from "../lib/history";
 import { pasteNotes } from "../lib/piano-roll";
@@ -168,18 +171,86 @@ export default function Session() {
     [takeUrl, setTakeUrl] = useState(""),
     [atEditor, setAtEditor] = useState(false),
     [historyRevision, setHistoryRevision] = useState(0),
-    [clipboard, setClipboard] = useState<Note[] | null>(null);
+    [clipboard, setClipboard] = useState<Note[] | null>(null),
+    [showTempo, setShowTempo] = useState(false),
+    [bpmDraft, setBpmDraft] = useState("120"),
+    [bpmError, setBpmError] = useState(""),
+    [sharing, setSharing] = useState(false),
+    [shareStatus, setShareStatus] = useState("");
   const history = useRef(new History<Project>()),
     state = useRef(project),
     engine = useRef<AudioEngine | null>(null),
     file = useRef<HTMLInputElement>(null),
     editor = useRef<HTMLElement>(null),
+    tempoButton = useRef<HTMLButtonElement>(null),
     recordStart = useRef(0),
     recordBusy = useRef(false);
   state.current = project;
   const track =
       project.tracks.find((t) => t.id === selected) || project.tracks[0],
     clip = track.clips[clipIndex];
+  function closeTempo() {
+    setShowTempo(false);
+    tempoButton.current?.focus();
+  }
+  function applyTempo() {
+    const bpm = parseBpm(bpmDraft);
+    if (bpm === null) {
+      setBpmError("Enter a BPM from 40 to 240.");
+      return;
+    }
+    edit((p) => ({ ...p, bpm }));
+    closeTempo();
+  }
+  async function shareRecording() {
+    if (!take || sharing) return;
+    setSharing(true);
+    setShareStatus("");
+    try {
+      const result = await shareAudio(
+        take,
+        state.current.name + ".mp3",
+        navigator,
+      );
+      if (result === "unsupported") {
+        download(take, state.current.name + ".mp3");
+        setShareStatus(
+          "File sharing is unavailable in this browser. Your MP3 was downloaded.",
+        );
+      }
+    } catch {
+      setShareStatus(
+        "Could not share this recording. Export the MP3 to share it manually.",
+      );
+    } finally {
+      setSharing(false);
+    }
+  }
+  useEffect(() => {
+    const gesture = (e: Event) => e.preventDefault();
+    const wheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) e.preventDefault();
+    };
+    const touch = (e: TouchEvent) => {
+      if (e.touches.length > 1) e.preventDefault();
+    };
+    const keys = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && ["+", "-", "=", "0"].includes(e.key))
+        e.preventDefault();
+    };
+    document.addEventListener("gesturestart", gesture, { passive: false });
+    document.addEventListener("gesturechange", gesture, { passive: false });
+    document.addEventListener("touchmove", touch, { passive: false });
+    window.addEventListener("wheel", wheel, { passive: false });
+    window.addEventListener("keydown", keys);
+    return () => {
+      document.removeEventListener("gesturestart", gesture);
+      document.removeEventListener("gesturechange", gesture);
+      document.removeEventListener("touchmove", touch);
+      window.removeEventListener("wheel", wheel);
+      window.removeEventListener("keydown", keys);
+    };
+  }, []);
   function edit(fn: (p: Project) => Project, remember = true) {
     const next = ensureEmptyRow(fn(state.current));
     if (remember && history.current.commit(state.current, next))
@@ -232,6 +303,7 @@ export default function Session() {
   }, [project]);
   useEffect(() => () => engine.current?.dispose(), []);
   useEffect(() => {
+    setShareStatus("");
     if (!take) {
       setTakeUrl("");
       return;
@@ -347,6 +419,13 @@ export default function Session() {
   }
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (showTempo) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeTempo();
+        }
+        return;
+      }
       if (e.metaKey || e.ctrlKey) {
         const key = e.key.toLowerCase();
         if (key === "z" || key === "y") {
@@ -560,20 +639,20 @@ export default function Session() {
               <Circle size={14} fill="currentColor" />
             </button>
           </div>
-          <div className="tempo">
-            <input
-              aria-label="Tempo"
-              type="number"
-              min="40"
-              max="240"
-              value={project.bpm}
-              onChange={(e) => {
-                const v = +e.target.value;
-                if (v >= 40 && v <= 240) edit((p) => ({ ...p, bpm: v }));
-              }}
-            />
+          <button
+            className="tempo"
+            ref={tempoButton}
+            aria-label={`Edit tempo, ${project.bpm} BPM`}
+            aria-haspopup="dialog"
+            onClick={() => {
+              setBpmDraft(String(project.bpm));
+              setBpmError("");
+              setShowTempo(true);
+            }}
+          >
+            <b>{project.bpm}</b>
             <span>BPM</span>
-          </div>
+          </button>
           <span className="signature">4 / 4</span>
           <div className="position">
             {String(step < 0 ? 1 : Math.floor(step / 16) + 1).padStart(3, "0")}
@@ -633,11 +712,7 @@ export default function Session() {
           <button
             className="export"
             onClick={() =>
-              recording
-                ? finishRecording()
-                : take
-                  ? download(take, `${project.name}.mp3`)
-                  : setShowRecord(true)
+              recording ? finishRecording() : setShowRecord(true)
             }
           >
             <AudioLines size={16} />
@@ -980,6 +1055,26 @@ export default function Session() {
                 display={`${track.frequency.toFixed(2)} Hz`}
                 onChange={(frequency) => updateTrack(track.id, { frequency })}
               />
+              <div
+                className="note-shortcuts"
+                aria-label="Common note frequencies"
+              >
+                {noteShortcuts.map((note) => (
+                  <button
+                    key={note.name}
+                    aria-label={`Set ${note.name}, ${note.frequency} Hz`}
+                    aria-pressed={
+                      Math.abs(track.frequency - note.frequency) < 0.005
+                    }
+                    onClick={() =>
+                      updateTrack(track.id, { frequency: note.frequency })
+                    }
+                  >
+                    <b>{note.name}</b>
+                    <span>{note.frequency} Hz</span>
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="envelope">
               <div className="section-label">SHAPE</div>
@@ -1135,6 +1230,98 @@ export default function Session() {
           {message}
         </div>
       )}
+      {showTempo && (
+        <div className="modal-backdrop" onClick={closeTempo}>
+          <form
+            className="tempo-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="tempo-title"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => {
+              e.preventDefault();
+              applyTempo();
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "Tab") return;
+              const items = e.currentTarget.querySelectorAll<HTMLElement>(
+                "button:not(:disabled),input",
+              );
+              const first = items[0],
+                last = items[items.length - 1];
+              if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+              } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+              }
+            }}
+          >
+            <div className="dialog-header">
+              <h2 id="tempo-title">Tempo</h2>
+              <button
+                type="button"
+                aria-label="Close tempo"
+                onClick={closeTempo}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <label className="tempo-field">
+              <input
+                aria-label="BPM"
+                type="text"
+                inputMode="decimal"
+                autoFocus
+                maxLength={7}
+                value={bpmDraft}
+                aria-invalid={!!bpmError}
+                aria-describedby={bpmError ? "bpm-error" : undefined}
+                onFocus={(e) => e.currentTarget.select()}
+                onChange={(e) => {
+                  setBpmDraft(e.target.value);
+                  setBpmError("");
+                }}
+              />
+              <span>BPM</span>
+            </label>
+            <div className="tempo-steps">
+              <button
+                type="button"
+                onClick={() => {
+                  setBpmDraft(stepBpm(bpmDraft, project.bpm, -10));
+                  setBpmError("");
+                }}
+              >
+                −10 BPM
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setBpmDraft(stepBpm(bpmDraft, project.bpm, 10));
+                  setBpmError("");
+                }}
+              >
+                +10 BPM
+              </button>
+            </div>
+            {bpmError && (
+              <p id="bpm-error" role="alert" className="tempo-error">
+                {bpmError}
+              </p>
+            )}
+            <div className="dialog-buttons">
+              <button type="button" onClick={closeTempo}>
+                Cancel
+              </button>
+              <button type="submit" className="primary">
+                Apply
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
       {showRecord && (
         <div className="modal-backdrop" onClick={() => setShowRecord(false)}>
           <section
@@ -1168,21 +1355,15 @@ export default function Session() {
                     ? "Encoding MP3…"
                     : take
                       ? "Your recording is ready."
-                      : "Record your live clip performance and mix."}
+                      : "Use Record to capture a session."}
             </p>
             <div className="dialog-buttons">
               <button
-                disabled={encoding || finishing}
-                onClick={() => void record()}
+                disabled={!take || recording || encoding || sharing}
+                onClick={() => void shareRecording()}
               >
-                {recording ? <Square size={13} /> : <Circle size={13} />}{" "}
-                {finishing
-                  ? "Finishing…"
-                  : recording
-                    ? "Finish recording"
-                    : take
-                      ? "New recording"
-                      : "Start recording"}
+                <Share2 size={14} />
+                {sharing ? "Sharing…" : "Share"}
               </button>
               <button
                 className="primary"
@@ -1193,6 +1374,11 @@ export default function Session() {
                 Export MP3
               </button>
             </div>
+            {shareStatus && (
+              <p className="share-status" role="status">
+                {shareStatus}
+              </p>
+            )}
             {take && !recording && <audio controls src={takeUrl} />}
           </section>
         </div>

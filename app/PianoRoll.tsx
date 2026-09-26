@@ -61,6 +61,15 @@ export function PianoRoll({
     top: number;
     left: number;
   } | null>(null);
+  const [scrollbarWidth, setScrollbarWidth] = useState(0);
+  useEffect(() => {
+    const v = viewport.current!;
+    const update = () => setScrollbarWidth(v.offsetWidth - v.clientWidth);
+    const observer = new ResizeObserver(update);
+    observer.observe(v);
+    update();
+    return () => observer.disconnect();
+  }, []);
   const shown = draft ? placeNote(notes, draft) : notes;
   useEffect(() => {
     if (viewport.current)
@@ -266,7 +275,7 @@ export function PianoRoll({
   return (
     <div className="piano-scroll">
       <div className="piano-roll">
-        <div className="piano-ruler">
+        <div className="piano-ruler" style={{ paddingRight: scrollbarWidth }}>
           <span />
           {Array.from({ length: 16 }, (_, i) => (
             <span key={i}>{i % 4 === 0 ? i / 4 + 1 : "·"}</span>

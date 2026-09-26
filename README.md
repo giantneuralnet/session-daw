@@ -21,3 +21,9 @@ The MP3 encoder is the unmodified `@breezystack/lamejs` module copied to `public
 Undo and redo are global for project edits, including notes, sounds, mixing, adding/removing tracks or rows, New, and loading a file. Use the toolbar buttons or Ctrl/Command+Z and Ctrl/Command+Shift+Z (Ctrl+Y also works). A slider drag is one history step. Playback and recording controls are not project-edit history; audio recordings are not restored by undo.
 
 The note editor Copy button copies all notes in the current pattern to an in-app clipboard. Paste replaces the destination pattern’s notes while preserving pitches, positions, and lengths. Ctrl/Command+C and V work while focus is inside the note editor. Pasting is undoable.
+
+Click the BPM display to open the tempo dialog. Enter a value from 40 to 240, use the ±10 BPM buttons, and Apply to commit one undoable change. Note-frequency shortcuts under Frequency use equal temperament with A4 = 440 Hz (C4 = 261.63 Hz).
+
+The complete 16-step note grid fits the available width at every screen size; only the pitch axis scrolls. Page zoom gestures and shortcuts are suppressed, while two-finger note scrolling remains available.
+
+The finished-recording dialog offers Export MP3 and Share. Share passes the MP3 file to the device share sheet where file sharing is supported; otherwise it downloads the MP3. Export MP3 in the toolbar reopens this dialog. Start another recording with the main transport Record button.
