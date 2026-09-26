@@ -1604,3 +1604,40 @@ footer > span {
     transition: none !important;
   }
 }
+.scroll-toggle {
+  position: fixed;
+  right: 20px;
+  bottom: 18px;
+  z-index: 5;
+  min-width: 85px;
+  height: 36px;
+  padding: 0 13px;
+  border: 1px solid #666075;
+  border-radius: 6px;
+  background: #393442;
+  color: #e4dff2;
+  font-size: 11px;
+  box-shadow: 0 4px 18px #0005;
+}
+.scroll-toggle:hover {
+  background: #4b4357;
+}
+.device {
+  scroll-margin-top: 16px;
+}
+footer {
+  padding-right: 126px;
+}
+@media (max-width: 650px) {
+  .scroll-toggle {
+    right: 12px;
+    bottom: 12px;
+    min-width: 78px;
+  }
+  footer {
+    padding-right: 105px;
+  }
+  footer > span:last-child {
+    display: none;
+  }
+}

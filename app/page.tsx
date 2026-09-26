@@ -2,6 +2,8 @@
 import { useState, useRef, useEffect, type CSSProperties } from "react";
 import {
   Play,
+  ArrowDown,
+  ArrowUp,
   Square,
   Circle,
   Plus,
@@ -156,10 +158,12 @@ export default function Session() {
     [tab, setTab] = useState<"sound" | "pattern">("sound"),
     [levels, setLevels] = useState<Record<string, number>>({}),
     [showRecord, setShowRecord] = useState(false),
-    [takeUrl, setTakeUrl] = useState("");
+    [takeUrl, setTakeUrl] = useState(""),
+    [atEditor, setAtEditor] = useState(false);
   const state = useRef(project),
     engine = useRef<AudioEngine | null>(null),
     file = useRef<HTMLInputElement>(null),
+    editor = useRef<HTMLElement>(null),
     recordStart = useRef(0),
     recordBusy = useRef(false);
   state.current = project;
@@ -167,11 +171,9 @@ export default function Session() {
       project.tracks.find((t) => t.id === selected) || project.tracks[0],
     clip = track.clips[clipIndex];
   function edit(fn: (p: Project) => Project) {
-    setProject((p) => {
-      const next = fn(p);
-      state.current = next;
-      return next;
-    });
+    const next = fn(state.current);
+    state.current = next;
+    setProject(next);
   }
   function updateTrack(id: string, patch: Partial<Track>) {
     edit((p) => ({
@@ -294,11 +296,35 @@ export default function Session() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   });
+  useEffect(() => {
+    const onScroll = () => setAtEditor(window.scrollY > 50);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  function toggleScroll() {
+    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)")
+      .matches
+      ? "instant"
+      : "smooth";
+    if (atEditor) {
+      setAtEditor(false);
+      window.scrollTo({ top: 0, behavior });
+    } else {
+      setTab("pattern");
+      setAtEditor(true);
+      requestAnimationFrame(() =>
+        editor.current?.scrollIntoView({ behavior, block: "start" }),
+      );
+    }
+  }
   function launch(t: Track, index: number) {
     if (playing) {
       getEngine().queue(t.id, index);
       setQueued((q) => ({ ...q, [t.id]: index }));
-    } else updateTrack(t.id, { active: index });
+    } else {
+      updateTrack(t.id, { active: index });
+      if (index >= 0) void play();
+    }
   }
   function launchClip(t: Track, index: number) {
     setSelected(t.id);
@@ -308,7 +334,9 @@ export default function Session() {
       const clips = [...t.clips];
       clips[index] = { notes: [] };
       updateTrack(t.id, { clips });
+      return;
     }
+    launch(t, playing && (queued[t.id] ?? t.active) === index ? -1 : index);
   }
   function startFresh() {
     stop();
@@ -547,7 +575,8 @@ export default function Session() {
                     >
                       <button
                         className="clip-edit"
-                        aria-label={`Edit ${columnLabel(i)}${j + 1}`}
+                        aria-label={`${c ? (playing && (queued[t.id] ?? t.active) === j ? "Stop" : "Play") : "Create"} ${columnLabel(i)}${j + 1} and edit`}
+                        aria-pressed={!!c && playing && t.active === j}
                         onClick={() => launchClip(t, j)}
                       >
                         <span className="clip-coordinate">
@@ -574,16 +603,15 @@ export default function Session() {
                       {c && (
                         <button
                           className="clip-launch"
-                          title={`${(queued[t.id] ?? t.active) === j ? "Stop" : "Launch"} ${columnLabel(i)}${j + 1}`}
-                          aria-label={`${(queued[t.id] ?? t.active) === j ? "Stop" : "Launch"} ${columnLabel(i)}${j + 1}`}
-                          onClick={() =>
-                            launch(t, (queued[t.id] ?? t.active) === j ? -1 : j)
-                          }
+                          title={`${playing && (queued[t.id] ?? t.active) === j ? "Stop" : "Play"} ${columnLabel(i)}${j + 1}`}
+                          aria-label={`${playing && (queued[t.id] ?? t.active) === j ? "Stop" : "Play"} ${columnLabel(i)}${j + 1}`}
+                          onClick={() => launchClip(t, j)}
                         >
-                          <Play
-                            size={10}
-                            fill={t.active === j ? "currentColor" : "none"}
-                          />
+                          {playing && t.active === j ? (
+                            <Square size={9} fill="currentColor" />
+                          ) : (
+                            <Play size={11} fill="currentColor" />
+                          )}
                         </button>
                       )}
                       {c && t.active === j && (
@@ -710,6 +738,8 @@ export default function Session() {
         </button>
       </div>
       <section
+        ref={editor}
+        id="note-editor"
         className="device"
         style={{ "--track": track.color } as CSSProperties}
       >
@@ -919,6 +949,15 @@ export default function Session() {
           </div>
         )}
       </section>
+      <button
+        className="scroll-toggle"
+        onClick={toggleScroll}
+        aria-label={atEditor ? "Scroll to top of app" : "Scroll to note editor"}
+        aria-controls="note-editor"
+      >
+        {atEditor ? <ArrowUp size={15} /> : <ArrowDown size={15} />}{" "}
+        {atEditor ? "Top" : "Notes"}
+      </button>
       <footer>
         <span>
           <i className={playing ? "status-dot green" : "status-dot"} />
