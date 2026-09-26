@@ -492,3 +492,45 @@ test("FFT microphone capture leaves playing clips, their clock, gains and sessio
     "leaving the FFT editor does not close the music context",
   );
 });
+
+test("non-4/4 clip launches, note gates and recording completion follow the new bar boundary", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  for (const [signature, steps] of [
+    [[3, 4], 12],
+    [[7, 8], 14],
+    [[5, 4], 20],
+  ]) {
+    const p = initialProject();
+    p.timeSignature = signature;
+    const track = p.tracks[0];
+    track.active = 0;
+    track.clips[0].notes = [
+      { id: "tail", start: steps - 1, pitch: 0, length: 4 },
+      { id: "outside", start: steps + 1, pitch: 1, length: 1 },
+    ];
+    const e = new AudioEngine(p);
+    const sounded = [],
+      launched = [];
+    e.note = (...args) => sounded.push(args);
+    e.onLaunch = (...args) => launched.push(args);
+    e.playing = true;
+    e.step = steps - 1;
+    e.next = 0;
+    e.tick();
+    assert.equal(sounded.length, 1);
+    assert.equal(
+      sounded[0][3],
+      0.125,
+      "note gates end at the shortened bar boundary",
+    );
+    e.queue(track.id, 1);
+    assert.equal(launched.length, 0);
+    e.ctx.currentTime = 0.125;
+    e.tick();
+    assert.deepEqual(launched, [[track.id, 1]]);
+    e.recording = true;
+    e.finishRecording();
+    assert.equal(e.stopAtStep, steps * 2);
+    e.dispose();
+  }
+});

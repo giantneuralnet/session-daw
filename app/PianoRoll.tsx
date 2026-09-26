@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type PointerEvent,
+  type CSSProperties,
   type KeyboardEvent,
 } from "react";
 import { MIN_PITCH, MAX_PITCH, type Note } from "../lib/session";
@@ -12,6 +13,8 @@ import {
   drawNote,
   moveNote,
   resizeNote,
+  resizeNoteStart,
+  centeredPitch,
   placeNote,
   finishGesture,
 } from "../lib/piano-roll";
@@ -25,7 +28,7 @@ type Gesture = {
   x: number;
   y: number;
   scrollTop: number;
-  mode: "empty" | "move" | "resize";
+  mode: "empty" | "move" | "resize" | "resize-start";
   moved: boolean;
   draft: Note;
 };
@@ -36,6 +39,9 @@ export function PianoRoll({
   frequency,
   step,
   revision,
+  selectionRevision,
+  steps = 16,
+  beatSteps = 4,
 }: {
   notes: Note[];
   onChange: (notes: Note[]) => void;
@@ -43,13 +49,14 @@ export function PianoRoll({
   frequency: number;
   step: number;
   revision: number;
+  selectionRevision: number;
+  steps?: number;
+  beatSteps?: number;
 }) {
   const grid = useRef<HTMLDivElement>(null),
     viewport = useRef<HTMLDivElement>(null),
     gesture = useRef<Gesture | null>(null),
-    initialPitch = useRef(
-      notes.length ? notes.reduce((s, n) => s + n.pitch, 0) / notes.length : 12,
-    );
+    initialPitch = useRef(centeredPitch(notes, steps));
   const [draft, setDraft] = useState<Note | null>(null),
     [cursor, setCursor] = useState({
       start: 0,
@@ -70,13 +77,15 @@ export function PianoRoll({
     update();
     return () => observer.disconnect();
   }, []);
-  const shown = draft ? placeNote(notes, draft) : notes;
+  const shown = (draft ? placeNote(notes, draft) : notes).filter(
+    (n) => n.start < steps,
+  );
   useEffect(() => {
     if (viewport.current)
       viewport.current.scrollTop =
-        (MAX_PITCH - initialPitch.current) * ROW_HEIGHT -
+        (MAX_PITCH - centeredPitch(notes, steps) + 0.5) * ROW_HEIGHT -
         viewport.current.clientHeight / 2;
-  }, []);
+  }, [selectionRevision, steps]);
   useEffect(() => {
     gesture.current = null;
     setDraft(null);
@@ -126,7 +135,11 @@ export function PianoRoll({
   function cell(e: PointerEvent) {
     const r = grid.current!.getBoundingClientRect();
     return {
-      start: clamp(Math.floor(((e.clientX - r.left) / r.width) * 16), 0, 15),
+      start: clamp(
+        Math.floor(((e.clientX - r.left) / r.width) * steps),
+        0,
+        steps - 1,
+      ),
       pitch:
         MAX_PITCH -
         clamp(Math.floor((e.clientY - r.top) / ROW_HEIGHT), 0, ROWS - 1),
@@ -139,11 +152,14 @@ export function PianoRoll({
       id = target.closest<HTMLElement>("[data-note]")?.dataset.note,
       existing = notes.find((n) => n.id === id);
     const note =
-      existing ?? drawNote(crypto.randomUUID(), at.start, at.start, at.pitch);
+      existing ??
+      drawNote(crypto.randomUUID(), at.start, at.start, at.pitch, steps);
     const mode = existing
-      ? target.closest("[data-resize]")
-        ? "resize"
-        : "move"
+      ? target.closest<HTMLElement>("[data-resize]")?.dataset.resize === "left"
+        ? "resize-start"
+        : target.closest("[data-resize]")
+          ? "resize"
+          : "move"
       : "empty";
     if (existing) e.preventDefault();
     gesture.current = {
@@ -174,9 +190,27 @@ export function PianoRoll({
     }
     const at = cell(e),
       next =
-        g.mode === "resize"
-          ? resizeNote(g.original, at.start)
-          : moveNote(g.original, at.start - g.anchor, at.pitch - g.pitch);
+        g.mode === "resize" || g.mode === "resize-start"
+          ? (() => {
+              const delta = Math.round(
+                ((e.clientX - g.x) /
+                  grid.current!.getBoundingClientRect().width) *
+                  steps,
+              );
+              return g.mode === "resize-start"
+                ? resizeNoteStart(g.original, g.original.start + delta, steps)
+                : resizeNote(
+                    g.original,
+                    g.original.start + g.original.length - 1 + delta,
+                    steps,
+                  );
+            })()
+          : moveNote(
+              g.original,
+              at.start - g.anchor,
+              at.pitch - g.pitch,
+              steps,
+            );
     if (next.pitch !== g.draft.pitch) onPreview(next.pitch);
     g.draft = next;
     setDraft(next);
@@ -241,6 +275,7 @@ export function PianoRoll({
               cursor.start,
               cursor.start,
               cursor.pitch,
+              steps,
             ),
           ),
         );
@@ -253,15 +288,15 @@ export function PianoRoll({
     if (!dx && !dy) return;
     if (e.shiftKey && hit) {
       const n = dx
-        ? resizeNote(hit, hit.start + hit.length - 1 + dx)
-        : moveNote(hit, 0, dy);
+        ? resizeNote(hit, hit.start + hit.length - 1 + dx, steps)
+        : moveNote(hit, 0, dy, steps);
       onChange(placeNote(notes, n));
       setCursor({ start: n.start, pitch: n.pitch });
       reveal(n.pitch);
       if (dy && n.pitch !== hit.pitch) onPreview(n.pitch);
     } else {
       const next = {
-        start: clamp(cursor.start + dx, 0, 15),
+        start: clamp(cursor.start + dx, 0, steps - 1),
         pitch: clamp(cursor.pitch + dy, MIN_PITCH, MAX_PITCH),
       };
       setCursor(next);
@@ -274,11 +309,20 @@ export function PianoRoll({
   }
   return (
     <div className="piano-scroll">
-      <div className="piano-roll">
+      <div
+        className="piano-roll"
+        style={
+          {
+            "--steps": steps,
+            "--beat-width": `${(100 * beatSteps) / steps}%`,
+            "--step-width": `${100 / steps}%`,
+          } as CSSProperties
+        }
+      >
         <div className="piano-ruler" style={{ paddingRight: scrollbarWidth }}>
           <span />
-          {Array.from({ length: 16 }, (_, i) => (
-            <span key={i}>{i % 4 === 0 ? i / 4 + 1 : "·"}</span>
+          {Array.from({ length: steps }, (_, i) => (
+            <span key={i}>{i % beatSteps === 0 ? i / beatSteps + 1 : "·"}</span>
           ))}
         </div>
         <div
@@ -312,7 +356,7 @@ export function PianoRoll({
               className="note-grid"
               style={{ height: ROWS * ROW_HEIGHT }}
               role="grid"
-              aria-label="Piano roll. Tap empty space to add a note. Tap a note to erase silently. Scroll or drag empty space to browse pitches. Drag notes to move; drag their right edge to resize. Arrow keys select; Enter toggles notes; Shift arrows resize or transpose."
+              aria-label="Piano roll. Tap empty space to add a note. Tap a note to erase silently. Scroll or drag empty space to browse pitches. Drag notes to move; drag either edge to resize. Arrow keys select; Enter toggles notes; Shift arrows resize or transpose."
               tabIndex={0}
               onKeyDown={key}
               onPointerDown={down}
@@ -337,15 +381,20 @@ export function PianoRoll({
                   aria-label={`${label(n.pitch)}, step ${n.start + 1}, length ${n.length}`}
                   className={`piano-note ${draft?.id === n.id ? "note-draft" : ""}`}
                   style={{
-                    left: `${(n.start / 16) * 100}%`,
+                    left: `${(n.start / steps) * 100}%`,
                     top: (MAX_PITCH - n.pitch) * ROW_HEIGHT,
-                    width: `${(n.length / 16) * 100}%`,
+                    width: `${(Math.min(n.length, steps - n.start) / steps) * 100}%`,
                     height: ROW_HEIGHT,
                   }}
                 >
                   <span />
                   <i
-                    data-resize="true"
+                    data-resize="left"
+                    className="note-resize note-resize-left"
+                    title="Drag to resize note start"
+                  />
+                  <i
+                    data-resize="right"
                     className="note-resize"
                     title="Drag to resize note"
                   />
@@ -354,7 +403,7 @@ export function PianoRoll({
               <div
                 className="note-cursor"
                 style={{
-                  left: `${(cursor.start / 16) * 100}%`,
+                  left: `${(cursor.start / steps) * 100}%`,
                   top: (MAX_PITCH - cursor.pitch) * ROW_HEIGHT,
                   height: ROW_HEIGHT,
                 }}
@@ -362,7 +411,7 @@ export function PianoRoll({
               {step >= 0 && (
                 <div
                   className="piano-playhead"
-                  style={{ left: `${((step % 16) / 16) * 100}%` }}
+                  style={{ left: `${((step % steps) / steps) * 100}%` }}
                 />
               )}
             </div>

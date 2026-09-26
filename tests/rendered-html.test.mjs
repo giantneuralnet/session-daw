@@ -21,13 +21,13 @@ test("production server renders the session controls without starter content", a
   assert.match(html, /Edit tempo, 120 BPM/);
   assert.match(html, /Set A4, 440 Hz/);
   assert.match(html, /Set C4, 261.63 Hz/);
-  assert.match(html, /Export MP3/);
+  assert.match(html, />Export<\/span>/);
   assert.match(html, /New empty session/);
   assert.match(html, /Play A1 and edit/);
   assert.match(html, /Scroll to note editor/);
   assert.match(html, /aria-label="Undo"/);
   assert.match(html, /aria-label="Redo"/);
-  assert.doesNotMatch(html, /Add row|track-header|row-label-spacer/);
+  assert.doesNotMatch(html, /Add row|track-stop|device-tools|1 bar/);
   assert.match(html, /Closed hat/);
   assert.match(html, /Warm pad/);
   assert.match(html, /Record sound/);
@@ -36,6 +36,21 @@ test("production server renders the session controls without starter content", a
   assert.match(html, /Construct with square waves/);
 
   assert.match(html, /FFT/);
+  assert.match(html, /Duplicate instrument A/);
+  assert.match(html, /Delete instrument F/);
+  assert.match(html, /Copyright © Giant Neural Network LLC/);
+  assert.doesNotMatch(
+    html,
+    /aria-label="Play session"|<small>\.json<|footer-separator|Space to play/,
+  );
+  const emptySlots = [
+    ...html.matchAll(/<div class="clip empty[^>]*>(.*?)<\/div>/g),
+  ];
+  assert.ok(emptySlots.length > 0);
+  for (const [, slot] of emptySlots) {
+    assert.doesNotMatch(slot, /clip-coordinate|clip-launch|mini-notes/);
+    assert.equal((slot.match(/<svg/g) ?? []).length, 1);
+  }
   assert.doesNotMatch(
     html,
     /Selection start seconds|Selection end seconds|Full sound|Preview sound|>Reconstruct</,

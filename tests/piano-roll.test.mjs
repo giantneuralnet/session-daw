@@ -84,7 +84,7 @@ test("old JSON projects migrate rests and notes to duration-based notes", () => 
 });
 test("invalid durations, repeated note IDs and misaligned row counts are rejected", () => {
   for (const corrupt of [
-    (p) => (p.tracks[0].clips[0].notes[0].length = 17),
+    (p) => (p.tracks[0].clips[0].notes[0].length = 129),
     (p) => (p.tracks[0].clips[0].notes[0].pitch = 61),
     (p) => (p.tracks[0].clips[0].notes[0].start = -1),
     (p) => p.tracks[0].clips.push(null),
@@ -95,4 +95,52 @@ test("invalid durations, repeated note IDs and misaligned row counts are rejecte
     corrupt(p);
     assert.throws(() => parseProject(JSON.stringify(p)));
   }
+});
+
+test("meter-aware editing resizes either edge and centers the visible pitch range", async () => {
+  const { resizeNote, resizeNoteStart, centeredPitch, finishGesture } =
+    await import("../lib/piano-roll.ts");
+  const n = { id: "n", start: 4, length: 4, pitch: 7 };
+  assert.deepEqual(resizeNoteStart(n, 2, 12), { ...n, start: 2, length: 6 });
+  assert.deepEqual(resizeNoteStart(n, 10, 12), { ...n, start: 7, length: 1 });
+  assert.deepEqual(resizeNoteStart(n, -4, 12), { ...n, start: 0, length: 8 });
+  assert.equal(resizeNote(n, 30, 12).length, 8);
+  assert.equal(drawNote("end", 30, 30, 0, 32).start, 30);
+  assert.equal(moveNote(n, 30, 0, 12).start, 8);
+  const notes = [
+    { ...n, pitch: -12 },
+    { ...n, id: "high", pitch: 24 },
+    { ...n, id: "outside", start: 14, pitch: 60 },
+  ];
+  assert.equal(centeredPitch(notes, 12), 6);
+  assert.equal(centeredPitch([], 12), 0);
+  assert.deepEqual(finishGesture([n], "resize-start", n, n, false), {
+    notes: [],
+    preview: null,
+  });
+});
+
+test("time signatures round-trip and shorter bars preserve notes for later expansion", async () => {
+  const { stepsPerBar } = await import("../lib/session.ts");
+  const p = initialProject();
+  const original = structuredClone(p.tracks);
+  for (const [signature, steps] of [
+    [[3, 4], 12],
+    [[6, 8], 12],
+    [[7, 8], 14],
+    [[5, 4], 20],
+    [[16, 2], 128],
+    [[1, 16], 1],
+  ]) {
+    p.timeSignature = signature;
+    const loaded = parseProject(JSON.stringify(p));
+    assert.equal(stepsPerBar(loaded), steps);
+    assert.deepEqual(loaded.tracks, original);
+  }
+  for (const bad of [[0, 4], [3, 3], [17, 4], [4], "4/4", [4, 4, 4]]) {
+    p.timeSignature = bad;
+    assert.throws(() => parseProject(JSON.stringify(p)), /time signature/);
+  }
+  delete p.timeSignature;
+  assert.equal(stepsPerBar(parseProject(JSON.stringify(p))), 16);
 });

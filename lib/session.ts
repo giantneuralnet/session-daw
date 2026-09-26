@@ -5,6 +5,15 @@ import {
 } from "./resynthesis.ts";
 export const MIN_PITCH = -36;
 export const MAX_PITCH = 60;
+export const MAX_STEPS = 128;
+export type TimeSignature = [number, number];
+export const signatureOf = (p: {
+  timeSignature?: TimeSignature;
+}): TimeSignature => p.timeSignature ?? [4, 4];
+export const stepsPerBar = (p: { timeSignature?: TimeSignature }) => {
+  const [beats, unit] = signatureOf(p);
+  return (beats * 16) / unit;
+};
 export type Wave = "sine" | "triangle" | "sawtooth" | "square" | "noise";
 export type Note = { id: string; start: number; pitch: number; length: number };
 export type Clip = { notes: Note[] };
@@ -32,6 +41,7 @@ export type Project = {
   version: 2;
   name: string;
   bpm: number;
+  timeSignature?: TimeSignature;
   master: number;
   compressor: number;
   tracks: Track[];
@@ -80,6 +90,7 @@ export function emptyProject(): Project {
     version: 2,
     name: "Session",
     bpm: 120,
+    timeSignature: [4, 4],
     master: 0.8,
     compressor: -18,
     tracks: [makeTrack(0)],
@@ -155,6 +166,16 @@ export function parseProject(raw: string): Project {
   )
     throw Error("Invalid session file.");
   const ids = new Set();
+  if (
+    p.timeSignature !== undefined &&
+    (!Array.isArray(p.timeSignature) ||
+      p.timeSignature.length !== 2 ||
+      !integer(p.timeSignature[0], 1, 16) ||
+      ![2, 4, 8, 16].includes(p.timeSignature[1]))
+  )
+    throw Error("Invalid time signature.");
+  // Notes beyond a shortened bar remain in JSON, ready when the bar expands.
+  const noteLimit = p.timeSignature === undefined ? 16 : MAX_STEPS;
   const rows = p.tracks[0]?.clips?.length;
   if (!integer(rows, 1, 64)) throw Error("Invalid row count.");
   for (const t of p.tracks) {
@@ -217,16 +238,16 @@ export function parseProject(raw: string): Project {
         };
       }
       const noteIds = new Set();
-      if (c.notes.length > 16 * (MAX_PITCH - MIN_PITCH + 1))
+      if (c.notes.length > noteLimit * (MAX_PITCH - MIN_PITCH + 1))
         throw Error("Too many notes.");
       for (const n of c.notes) {
         if (
           !n ||
           typeof n.id !== "string" ||
           noteIds.has(n.id) ||
-          !integer(n.start, 0, 15) ||
+          !integer(n.start, 0, noteLimit - 1) ||
           !integer(n.pitch, MIN_PITCH, MAX_PITCH) ||
-          !integer(n.length, 1, 16 - n.start)
+          !integer(n.length, 1, noteLimit - n.start)
         )
           throw Error("Invalid note pattern.");
         noteIds.add(n.id);

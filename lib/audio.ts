@@ -1,7 +1,7 @@
 import { TailMonitor } from "./tail-monitor.ts";
 import { prepareAudioPlayback } from "./audio-session.ts";
 import { renderedSound, type Reconstruction } from "./resynthesis.ts";
-import type { Project, Track } from "./session";
+import { stepsPerBar, type Project, type Track } from "./session.ts";
 type Channel = {
   input: GainNode;
   gain: GainNode;
@@ -181,8 +181,10 @@ export class AudioEngine {
     if (!this.recording || this.finishing) return;
     this.finishing = true;
     this.pending.clear();
-    if (this.playing)
-      this.stopAtStep = Math.max(16, Math.ceil(this.step / 16) * 16);
+    if (this.playing) {
+      const steps = stepsPerBar(this.project);
+      this.stopAtStep = Math.max(steps, Math.ceil(this.step / steps) * steps);
+    }
     const monitor = new TailMonitor();
     const samples = new Float32Array(2048);
     this.tailTimer = setInterval(() => {
@@ -220,7 +222,8 @@ export class AudioEngine {
         if (this.ctx.currentTime >= this.next) this.stop(false);
         return;
       }
-      if (this.step % 16 === 0)
+      const steps = stepsPerBar(this.project);
+      if (this.step % steps === 0)
         for (const [id, clip] of this.pending) {
           const t = this.project.tracks.find((x) => x.id === id);
           if (t) {
@@ -236,12 +239,12 @@ export class AudioEngine {
         }
       for (const t of this.project.tracks) {
         for (const n of t.clips[t.active]?.notes ?? []) {
-          if (n.start === this.step % 16)
+          if (n.start === this.step % steps)
             this.note(
               t,
               n.pitch,
               this.next,
-              (n.length * 60) / this.project.bpm / 4,
+              (Math.min(n.length, steps - n.start) * 60) / this.project.bpm / 4,
             );
         }
       }

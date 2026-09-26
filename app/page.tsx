@@ -39,6 +39,9 @@ import {
   emptyProject,
   ensureEmptyRow,
   columnLabel,
+  signatureOf,
+  stepsPerBar,
+  type TimeSignature,
   type Note,
   makeTrack,
   parseProject,
@@ -181,11 +184,13 @@ export default function Session() {
     [bpmError, setBpmError] = useState(""),
     [sharing, setSharing] = useState(false),
     [shareStatus, setShareStatus] = useState("");
+  const [signatureDraft, setSignatureDraft] = useState<TimeSignature>([4, 4]);
+  const [patternSelection, setPatternSelection] = useState(0);
   const [previewStopRevision, setPreviewStopRevision] = useState(0);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [captureRevision, setCaptureRevision] = useState(0);
-  const [saveStatus, setSaveStatus] = useState("Restoring…");
-  const [offlineReady, setOfflineReady] = useState(false);
+  const [, setSaveStatus] = useState("Restoring…");
+  const [, setOfflineReady] = useState(false);
   const recovery = useRef<LocalRecovery | null>(null);
   const recoveryLoaded = useRef(false);
   const recoveryDirty = useRef(false);
@@ -210,6 +215,9 @@ export default function Session() {
   const track =
       project.tracks.find((t) => t.id === selected) || project.tracks[0],
     clip = track.clips[clipIndex];
+  const barSteps = stepsPerBar(project);
+  const [beats, beatUnit] = signatureOf(project);
+  const beatSteps = 16 / beatUnit;
   function flushRecovery() {
     if (!recoveryLoaded.current || !recovery.current)
       return Promise.resolve(false);
@@ -313,7 +321,7 @@ export default function Session() {
       setBpmError("Enter a BPM from 40 to 240.");
       return;
     }
-    edit((p) => ({ ...p, bpm }));
+    edit((p) => ({ ...p, bpm, timeSignature: signatureDraft }));
     closeTempo();
   }
   async function shareRecording() {
@@ -657,6 +665,7 @@ export default function Session() {
     }
   }
   function launchClip(t: Track, index: number) {
+    setPatternSelection((v) => v + 1);
     setSelected(t.id);
     setClipIndex(index);
     setTab("pattern");
@@ -666,6 +675,7 @@ export default function Session() {
       updateTrack(t.id, { clips });
       return;
     }
+    if (!t.clips[index]?.notes.length) return;
     launch(t, playing && (queued[t.id] ?? t.active) === index ? -1 : index);
   }
   function startFresh() {
@@ -762,6 +772,39 @@ export default function Session() {
     setSelected(t.id);
     setClipIndex(0);
   }
+  function duplicateTrack(source: Track) {
+    if (project.tracks.length >= 16) return;
+    const copy = {
+      ...structuredClone(source),
+      id: crypto.randomUUID(),
+      active: -1,
+    };
+    const capture = captures.current.get(source.id);
+    if (capture)
+      captures.current.set(copy.id, {
+        ...capture,
+        window: [...capture.window],
+        appliedModel: capture.appliedModel ? copy.reconstruction : undefined,
+      });
+    edit((p) => {
+      const tracks = [...p.tracks];
+      tracks.splice(tracks.findIndex((t) => t.id === source.id) + 1, 0, copy);
+      return {
+        ...p,
+        tracks: tracks.map((t, i) => ({ ...t, name: columnLabel(i) })),
+      };
+    });
+    setSelected(copy.id);
+  }
+  function deleteTrack(source: Track) {
+    if (project.tracks.length === 1) return;
+    const next = project.tracks.filter((t) => t.id !== source.id);
+    edit((p) => ({
+      ...p,
+      tracks: next.map((t, i) => ({ ...t, name: columnLabel(i) })),
+    }));
+    if (selected === source.id) setSelected(next[0].id);
+  }
   function updateNotes(notes: Note[]) {
     const clips = [...track.clips];
     clips[clipIndex] = { notes };
@@ -772,9 +815,6 @@ export default function Session() {
       .preview(track, pitch)
       .catch(() => setMessage("Audio preview could not start."));
   }
-  const activeCount = project.tracks.filter(
-    (t) => t.active >= 0 && !t.mute,
-  ).length;
   return (
     <main
       inert={!recoveryReady}
@@ -788,14 +828,6 @@ export default function Session() {
       <header className="transport">
         <div className="transport-left">
           <div className="play-controls">
-            <button
-              aria-label={playing ? "Stop playback" : "Play session"}
-              title="Play / stop · Space"
-              className={playing ? "play active" : "play"}
-              onClick={() => (playing ? stop() : void play())}
-            >
-              <Play size={17} fill="currentColor" />
-            </button>
             <button aria-label="Stop and reset" onClick={stop}>
               <Square size={14} fill="currentColor" />
             </button>
@@ -816,6 +848,7 @@ export default function Session() {
             aria-haspopup="dialog"
             onClick={() => {
               setBpmDraft(String(project.bpm));
+              setSignatureDraft(signatureOf(project));
               setBpmError("");
               setShowTempo(true);
             }}
@@ -823,20 +856,27 @@ export default function Session() {
             <b>{project.bpm}</b>
             <span>BPM</span>
           </button>
-          <span className="signature">4 / 4</span>
+          <span className="signature">
+            {beats} / {beatUnit}
+          </span>
           <div className="position">
-            {String(step < 0 ? 1 : Math.floor(step / 16) + 1).padStart(3, "0")}
+            {String(step < 0 ? 1 : Math.floor(step / barSteps) + 1).padStart(
+              3,
+              "0",
+            )}
             <span>.</span>
-            {step < 0 ? 1 : Math.floor((step % 16) / 4) + 1}
+            {step < 0 ? 1 : Math.floor((step % barSteps) / beatSteps) + 1}
             <span>.</span>
-            {step < 0 ? 1 : (step % 4) + 1}
+            {step < 0 ? 1 : (step % beatSteps) + 1}
           </div>
           <div className="beat-dots">
-            {[0, 1, 2, 3].map((i) => (
+            {Array.from({ length: beats }, (_, i) => i).map((i) => (
               <i
                 key={i}
                 className={
-                  playing && Math.floor((step % 16) / 4) === i ? "lit" : ""
+                  playing && Math.floor((step % barSteps) / beatSteps) === i
+                    ? "lit"
+                    : ""
                 }
               />
             ))}
@@ -876,17 +916,14 @@ export default function Session() {
           <button onClick={save}>
             <Download size={15} />
             <span>Save</span>
-            <small>.json</small>
           </button>
-          <i />
           <button
-            className="export"
             onClick={() =>
               recording ? finishRecording() : setShowRecord(true)
             }
           >
             <AudioLines size={16} />
-            <span>Export MP3</span>
+            <span>Export</span>
           </button>
         </div>
         <input
@@ -904,6 +941,7 @@ export default function Session() {
             style={{ "--count": project.tracks.length } as CSSProperties}
           >
             <div className="row-labels">
+              <div className="row-label-spacer" />
               {project.tracks[0].clips.map((_, j) => (
                 <button
                   key={j}
@@ -924,40 +962,69 @@ export default function Session() {
                 className={`track ${t.id === track.id ? "selected" : ""}`}
                 style={{ "--track": t.color } as CSSProperties}
               >
+                <div className="instrument-header">
+                  <button
+                    className="instrument-letter"
+                    aria-label={`Select instrument ${columnLabel(i)}`}
+                    onClick={() => setSelected(t.id)}
+                  >
+                    {columnLabel(i)}
+                  </button>
+                  <button
+                    aria-label={`Duplicate instrument ${columnLabel(i)}`}
+                    title="Duplicate instrument"
+                    disabled={project.tracks.length >= 16}
+                    onClick={() => duplicateTrack(t)}
+                  >
+                    <Copy size={13} />
+                  </button>
+                  <button
+                    aria-label={`Delete instrument ${columnLabel(i)}`}
+                    title="Delete instrument"
+                    disabled={project.tracks.length === 1}
+                    onClick={() => deleteTrack(t)}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
                 <div className="clip-slots">
                   {t.clips.map((c, j) => (
                     <div
                       key={j}
-                      className={`clip ${c ? "filled" : "empty"} ${t.active === j ? "on" : ""} ${queued[t.id] === j ? "queued" : ""} ${t.id === track.id && clipIndex === j ? "clip-selected" : ""}`}
+                      className={`clip ${c?.notes.length ? "filled" : "empty"} ${t.active === j ? "on" : ""} ${queued[t.id] === j ? "queued" : ""} ${t.id === track.id && clipIndex === j ? "clip-selected" : ""}`}
                     >
                       <button
                         className="clip-edit"
-                        aria-label={`${c ? (playing && (queued[t.id] ?? t.active) === j ? "Stop" : "Play") : "Create"} ${columnLabel(i)}${j + 1} and edit`}
+                        aria-label={`${c?.notes.length ? (playing && (queued[t.id] ?? t.active) === j ? "Stop" : "Play") : "Create"} ${columnLabel(i)}${j + 1} and edit`}
                         aria-pressed={!!c && playing && t.active === j}
                         onClick={() => launchClip(t, j)}
                       >
-                        <span className="clip-coordinate">
-                          {columnLabel(i)}
-                          {j + 1}
-                        </span>
-                        {c ? (
+                        {!!c?.notes.length && (
+                          <span className="clip-coordinate">
+                            {columnLabel(i)}
+                            {j + 1}
+                          </span>
+                        )}
+                        {c?.notes.length ? (
                           <div className="mini-notes">
-                            {c.notes.map((n) => (
-                              <i
-                                key={n.id}
-                                style={{
-                                  left: `${(n.start / 16) * 100}%`,
-                                  width: `${(n.length / 16) * 100}%`,
-                                  bottom: `${Math.max(0, Math.min(100, ((n.pitch + 36) / 96) * 100))}%`,
-                                }}
-                              />
-                            ))}
+                            {c.notes
+                              .filter((n) => n.start < barSteps)
+                              .map((n) => (
+                                <i
+                                  key={n.id}
+                                  style={{
+                                    left: `${(n.start / barSteps) * 100}%`,
+                                    width: `${(Math.min(n.length, barSteps - n.start) / barSteps) * 100}%`,
+                                    bottom: `${Math.max(0, Math.min(100, ((n.pitch + 36) / 96) * 100))}%`,
+                                  }}
+                                />
+                              ))}
                           </div>
                         ) : (
                           <Plus size={12} />
                         )}
                       </button>
-                      {c && (
+                      {!!c?.notes.length && (
                         <button
                           className="clip-launch"
                           title={`${playing && (queued[t.id] ?? t.active) === j ? "Stop" : "Play"} ${columnLabel(i)}${j + 1}`}
@@ -971,29 +1038,18 @@ export default function Session() {
                           )}
                         </button>
                       )}
-                      {c && t.active === j && (
+                      {!!c?.notes.length && t.active === j && (
                         <div
                           className="clip-progress"
                           style={{
                             width: playing
-                              ? `${(((step % 16) + 1) / 16) * 100}%`
+                              ? `${(((step % barSteps) + 1) / barSteps) * 100}%`
                               : "0%",
                           }}
                         />
                       )}
                     </div>
                   ))}
-                </div>
-                <div className="track-stop">
-                  <button
-                    aria-label={`Stop ${t.name}`}
-                    title="Stop track at next bar"
-                    onClick={() => launch(t, -1)}
-                    className={queued[t.id] === -1 ? "queued-stop" : ""}
-                  >
-                    <Square size={10} fill="currentColor" />
-                  </button>
-                  <span>{t.active >= 0 ? "1 bar" : "—"}</span>
                 </div>
                 <div className="mixer">
                   <div className="pan">
@@ -1113,48 +1169,6 @@ export default function Session() {
             >
               <Music2 size={13} />
               Pattern
-            </button>
-          </div>
-          <div className="device-tools">
-            <button
-              title="Duplicate track"
-              aria-label="Duplicate track"
-              onClick={() => {
-                if (project.tracks.length >= 16) return;
-                const t = {
-                  ...structuredClone(track),
-                  id: crypto.randomUUID(),
-                  name: `${track.name.slice(0, 32)} copy`,
-                  active: -1,
-                };
-                const sourceCapture = captures.current.get(track.id);
-                if (sourceCapture)
-                  captures.current.set(t.id, {
-                    ...sourceCapture,
-                    window: [...sourceCapture.window],
-                    appliedModel: sourceCapture.appliedModel
-                      ? t.reconstruction
-                      : undefined,
-                  });
-                edit((p) => ({ ...p, tracks: [...p.tracks, t] }));
-                setSelected(t.id);
-              }}
-            >
-              <Copy size={13} />
-            </button>
-            <button
-              title="Delete track"
-              aria-label="Delete track"
-              disabled={project.tracks.length === 1}
-              onClick={() => {
-                edit((p) => ({
-                  ...p,
-                  tracks: p.tracks.filter((t) => t.id !== track.id),
-                }));
-                setSelected(project.tracks.find((t) => t.id !== track.id)!.id);
-              }}
-            >
-              <Trash2 size={13} />
             </button>
           </div>
         </div>
@@ -1379,7 +1393,6 @@ export default function Session() {
         ) : (
           <div className="pattern-editor">
             <div className="pattern-toolbar">
-              <span>1 bar · 1/16</span>
               <button
                 onClick={copyPattern}
                 disabled={!clip?.notes.length}
@@ -1407,6 +1420,9 @@ export default function Session() {
               key={track.id + ":" + clipIndex}
               notes={clip?.notes ?? []}
               revision={historyRevision}
+              selectionRevision={patternSelection}
+              steps={barSteps}
+              beatSteps={beatSteps}
               onChange={updateNotes}
               onPreview={previewPitch}
               frequency={track.frequency}
@@ -1424,41 +1440,7 @@ export default function Session() {
         {atEditor ? <ArrowUp size={15} /> : <ArrowDown size={15} />}{" "}
         {atEditor ? "Top" : "Notes"}
       </button>
-      <footer>
-        <span>
-          <i className={playing ? "status-dot green" : "status-dot"} />
-          {finishing
-            ? "Finishing recording"
-            : recording
-              ? "Recording"
-              : playing
-                ? "Playing"
-                : "Stopped"}
-          <span className="footer-separator">/</span>
-          {project.tracks.length} tracks
-          <span className="footer-separator">/</span>
-          {activeCount} active
-        </span>
-        <span>
-          {Object.keys(queued).length > 0
-            ? "Launch queued for next bar"
-            : recording
-              ? clock(seconds)
-              : "Space to play / stop"}
-          <span className="footer-separator">·</span>
-          <span
-            className="footer-local"
-            title={
-              offlineReady
-                ? "Ready offline · checks for updates when opened"
-                : "Your work is saved in this browser"
-            }
-          >
-            {saveStatus}
-            {offlineReady ? " · Offline ready" : ""}
-          </span>
-        </span>
-      </footer>
+      <footer>Copyright © Giant Neural Network LLC.</footer>
       {message && (
         <div className="toast" role="status">
           <Check size={14} />
@@ -1480,7 +1462,7 @@ export default function Session() {
             onKeyDown={(e) => {
               if (e.key !== "Tab") return;
               const items = e.currentTarget.querySelectorAll<HTMLElement>(
-                "button:not(:disabled),input",
+                "button:not(:disabled),input,select",
               );
               const first = items[0],
                 last = items[items.length - 1];
@@ -1513,7 +1495,6 @@ export default function Session() {
                 value={bpmDraft}
                 aria-invalid={!!bpmError}
                 aria-describedby={bpmError ? "bpm-error" : undefined}
-                onFocus={(e) => e.currentTarget.select()}
                 onChange={(e) => {
                   setBpmDraft(e.target.value);
                   setBpmError("");
@@ -1540,6 +1521,36 @@ export default function Session() {
               >
                 +10 BPM
               </button>
+            </div>
+            <div className="signature-fields">
+              <span>Time signature</span>
+              <select
+                aria-label="Beats per bar"
+                value={signatureDraft[0]}
+                onChange={(e) =>
+                  setSignatureDraft([+e.target.value, signatureDraft[1]])
+                }
+              >
+                {Array.from({ length: 16 }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <span>/</span>
+              <select
+                aria-label="Beat unit"
+                value={signatureDraft[1]}
+                onChange={(e) =>
+                  setSignatureDraft([signatureDraft[0], +e.target.value])
+                }
+              >
+                {[2, 4, 8, 16].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
             </div>
             {bpmError && (
               <p id="bpm-error" role="alert" className="tempo-error">

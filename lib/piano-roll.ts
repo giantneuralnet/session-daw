@@ -6,24 +6,51 @@ export function drawNote(
   anchor: number,
   end: number,
   pitch: number,
+  steps = 16,
 ): Note {
-  const start = clamp(Math.min(anchor, end), 0, 15);
+  const start = clamp(Math.min(anchor, end), 0, steps - 1);
   return {
     id,
     start,
     pitch: clamp(pitch, MIN_PITCH, MAX_PITCH),
-    length: clamp(Math.abs(end - anchor) + 1, 1, 16 - start),
+    length: clamp(Math.abs(end - anchor) + 1, 1, steps - start),
   };
 }
-export function moveNote(note: Note, steps: number, rows: number): Note {
+export function moveNote(
+  note: Note,
+  steps: number,
+  rows: number,
+  barSteps = 16,
+): Note {
   return {
     ...note,
-    start: clamp(note.start + steps, 0, 16 - note.length),
+    start: clamp(
+      note.start + steps,
+      0,
+      barSteps - Math.min(note.length, barSteps),
+    ),
+    length: Math.min(note.length, barSteps),
     pitch: clamp(note.pitch + rows, MIN_PITCH, MAX_PITCH),
   };
 }
-export function resizeNote(note: Note, end: number): Note {
-  return { ...note, length: clamp(end - note.start + 1, 1, 16 - note.start) };
+export function resizeNote(note: Note, end: number, steps = 16): Note {
+  return {
+    ...note,
+    length: clamp(end - note.start + 1, 1, steps - note.start),
+  };
+}
+export function resizeNoteStart(note: Note, start: number, steps = 16): Note {
+  const end = Math.min(note.start + note.length, steps);
+  const next = clamp(start, 0, end - 1);
+  return { ...note, start: next, length: end - next };
+}
+export function centeredPitch(notes: Note[], steps = 16) {
+  const visible = notes.filter((n) => n.start < steps);
+  return visible.length
+    ? (Math.min(...visible.map((n) => n.pitch)) +
+        Math.max(...visible.map((n) => n.pitch))) /
+        2
+    : 0;
 }
 export function placeNote(notes: Note[], note: Note): Note[] {
   return [
@@ -47,7 +74,7 @@ export function pasteNotes(
 }
 export function finishGesture(
   notes: Note[],
-  mode: "empty" | "move" | "resize",
+  mode: "empty" | "move" | "resize" | "resize-start",
   original: Note,
   draft: Note,
   moved: boolean,
@@ -56,7 +83,7 @@ export function finishGesture(
     return moved
       ? { notes, preview: null }
       : { notes: placeNote(notes, original), preview: original.pitch };
-  if (mode === "move" && !moved)
+  if (!moved)
     return { notes: notes.filter((n) => n.id !== original.id), preview: null };
   return { notes: placeNote(notes, draft), preview: null };
 }
