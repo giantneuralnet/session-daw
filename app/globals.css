@@ -1641,3 +1641,91 @@ footer {
     display: none;
   }
 }
+.history-controls {
+  display: flex;
+  gap: 2px;
+  padding-right: 8px;
+  margin-right: 4px;
+  border-right: 1px solid var(--line);
+}
+.file-controls .history-controls button {
+  width: 27px;
+  padding: 0;
+}
+.pitch-viewport {
+  height: 342px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  scrollbar-color: #676273 #24252c;
+  scrollbar-width: auto;
+  touch-action: pan-y;
+}
+.piano-ruler {
+  padding-right: 15px;
+}
+.piano-keys button,
+.piano-row {
+  height: 18px;
+}
+.note-grid {
+  touch-action: pan-y;
+  cursor: crosshair;
+}
+.piano-note {
+  touch-action: none;
+}
+.note-resize {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  cursor: ew-resize;
+  border-right: 2px solid #ffffff35;
+  border-radius: 0 3px 3px 0;
+  touch-action: none;
+}
+.piano-body {
+  overflow: visible;
+}
+.scroll-toggle {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  bottom: 16px;
+}
+main {
+  padding-bottom: 58px;
+}
+footer {
+  padding-right: 26px;
+}
+@media (max-width: 650px) {
+  .file-controls {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    row-gap: 8px;
+  }
+  .scroll-toggle {
+    left: 50%;
+    right: auto;
+    bottom: 12px;
+  }
+  footer {
+    padding-right: 13px;
+  }
+  .pattern-toolbar {
+    gap: 7px;
+  }
+  .pattern-toolbar > span {
+    margin-right: auto;
+    font-size: 9px;
+  }
+  .piano-roll {
+    min-width: 480px;
+  }
+  .pitch-viewport {
+    height: 324px;
+  }
+}

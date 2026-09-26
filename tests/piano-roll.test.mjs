@@ -25,17 +25,17 @@ test("drawing in either direction creates inclusive snapped lengths", () => {
 });
 test("dragging preserves duration and clamps the whole note to the grid", () => {
   const n = drawNote("a", 4, 7, 12);
-  assert.deepEqual(moveNote(n, 20, 20), {
+  assert.deepEqual(moveNote(n, 20, 100), {
     id: "a",
     start: 12,
     length: 4,
-    pitch: 24,
+    pitch: 60,
   });
-  assert.deepEqual(moveNote(n, -20, -20), {
+  assert.deepEqual(moveNote(n, -20, -100), {
     id: "a",
     start: 0,
     length: 4,
-    pitch: 0,
+    pitch: -36,
   });
 });
 test("placing notes permits chords and replaces same-pitch overlaps", () => {
@@ -85,7 +85,7 @@ test("old JSON projects migrate rests and notes to duration-based notes", () => 
 test("invalid durations, repeated note IDs and misaligned row counts are rejected", () => {
   for (const corrupt of [
     (p) => (p.tracks[0].clips[0].notes[0].length = 17),
-    (p) => (p.tracks[0].clips[0].notes[0].pitch = 25),
+    (p) => (p.tracks[0].clips[0].notes[0].pitch = 61),
     (p) => (p.tracks[0].clips[0].notes[0].start = -1),
     (p) => p.tracks[0].clips.push(null),
     (p) =>

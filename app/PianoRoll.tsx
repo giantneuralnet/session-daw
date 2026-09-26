@@ -1,7 +1,22 @@
 "use client";
-import { useRef, useState, type PointerEvent, type KeyboardEvent } from "react";
-import type { Note } from "../lib/session";
-import { clamp, drawNote, moveNote, placeNote } from "../lib/piano-roll";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent,
+  type KeyboardEvent,
+} from "react";
+import { MIN_PITCH, MAX_PITCH, type Note } from "../lib/session";
+import {
+  clamp,
+  drawNote,
+  moveNote,
+  resizeNote,
+  placeNote,
+  finishGesture,
+} from "../lib/piano-roll";
+const ROW_HEIGHT = 18,
+  ROWS = MAX_PITCH - MIN_PITCH + 1;
 type Gesture = {
   pointer: number;
   original: Note;
@@ -9,7 +24,8 @@ type Gesture = {
   pitch: number;
   x: number;
   y: number;
-  mode: "draw" | "move";
+  scrollTop: number;
+  mode: "empty" | "move" | "resize";
   moved: boolean;
   draft: Note;
 };
@@ -19,35 +35,60 @@ export function PianoRoll({
   onPreview,
   frequency,
   step,
+  revision,
 }: {
   notes: Note[];
   onChange: (notes: Note[]) => void;
   onPreview: (pitch: number) => void;
   frequency: number;
   step: number;
+  revision: number;
 }) {
   const grid = useRef<HTMLDivElement>(null),
-    gesture = useRef<Gesture | null>(null);
+    viewport = useRef<HTMLDivElement>(null),
+    gesture = useRef<Gesture | null>(null),
+    initialPitch = useRef(
+      notes.length ? notes.reduce((s, n) => s + n.pitch, 0) / notes.length : 12,
+    );
   const [draft, setDraft] = useState<Note | null>(null),
-    [cursor, setCursor] = useState({ start: 0, pitch: 12 });
+    [cursor, setCursor] = useState({
+      start: 0,
+      pitch: Math.round(initialPitch.current),
+    });
   const shown = draft ? placeNote(notes, draft) : notes;
+  useEffect(() => {
+    if (viewport.current)
+      viewport.current.scrollTop =
+        (MAX_PITCH - initialPitch.current) * ROW_HEIGHT -
+        viewport.current.clientHeight / 2;
+  }, []);
+  useEffect(() => {
+    gesture.current = null;
+    setDraft(null);
+  }, [revision]);
   function cell(e: PointerEvent) {
     const r = grid.current!.getBoundingClientRect();
     return {
       start: clamp(Math.floor(((e.clientX - r.left) / r.width) * 16), 0, 15),
       pitch:
-        24 - clamp(Math.floor(((e.clientY - r.top) / r.height) * 25), 0, 24),
+        MAX_PITCH -
+        clamp(Math.floor((e.clientY - r.top) / ROW_HEIGHT), 0, ROWS - 1),
     };
   }
   function down(e: PointerEvent<HTMLDivElement>) {
     if (e.button !== 0 || gesture.current) return;
-    e.preventDefault();
     const at = cell(e),
-      id = (e.target as HTMLElement).closest<HTMLElement>("[data-note]")
-        ?.dataset.note,
+      target = e.target as HTMLElement,
+      id = target.closest<HTMLElement>("[data-note]")?.dataset.note,
       existing = notes.find((n) => n.id === id);
     const note =
       existing ?? drawNote(crypto.randomUUID(), at.start, at.start, at.pitch);
+    const mode = existing
+      ? target.closest("[data-resize]")
+        ? "resize"
+        : "move"
+      : "empty";
+    if (existing) e.preventDefault();
     gesture.current = {
       pointer: e.pointerId,
       original: note,
@@ -55,26 +96,30 @@ export function PianoRoll({
       pitch: at.pitch,
       x: e.clientX,
       y: e.clientY,
-      mode: existing ? "move" : "draw",
+      scrollTop: viewport.current!.scrollTop,
+      mode,
       moved: false,
       draft: note,
     };
     grid.current!.setPointerCapture(e.pointerId);
     grid.current!.focus({ preventScroll: true });
-    setDraft(note);
     setCursor(at);
-    onPreview(note.pitch);
   }
   function move(e: PointerEvent<HTMLDivElement>) {
     const g = gesture.current;
     if (!g || g.pointer !== e.pointerId) return;
-    const at = cell(e);
-    if (Math.hypot(e.clientX - g.x, e.clientY - g.y) > 4) g.moved = true;
+    if (Math.hypot(e.clientX - g.x, e.clientY - g.y) > 6) g.moved = true;
     if (!g.moved) return;
-    const next =
-      g.mode === "draw"
-        ? drawNote(g.original.id, g.anchor, at.start, at.pitch)
-        : moveNote(g.original, at.start - g.anchor, at.pitch - g.pitch);
+    if (g.mode === "empty") {
+      if (e.pointerType === "mouse")
+        viewport.current!.scrollTop = g.scrollTop + g.y - e.clientY;
+      return;
+    }
+    const at = cell(e),
+      next =
+        g.mode === "resize"
+          ? resizeNote(g.original, at.start)
+          : moveNote(g.original, at.start - g.anchor, at.pitch - g.pitch);
     if (next.pitch !== g.draft.pitch) onPreview(next.pitch);
     g.draft = next;
     setDraft(next);
@@ -83,19 +128,26 @@ export function PianoRoll({
   function finish(e: PointerEvent<HTMLDivElement>, cancel = false) {
     const g = gesture.current;
     if (!g || g.pointer !== e.pointerId) return;
-    if (!cancel)
-      onChange(
-        g.mode === "move" && !g.moved
-          ? notes.filter((n) => n.id !== g.original.id)
-          : placeNote(notes, g.draft),
-      );
     gesture.current = null;
     setDraft(null);
+    if (!cancel) {
+      const result = finishGesture(notes, g.mode, g.original, g.draft, g.moved);
+      if (result.notes !== notes) onChange(result.notes);
+      if (result.preview !== null) onPreview(result.preview);
+    }
     if (grid.current?.hasPointerCapture(e.pointerId))
       grid.current.releasePointerCapture(e.pointerId);
   }
+  function reveal(pitch: number) {
+    const v = viewport.current;
+    if (!v) return;
+    const y = (MAX_PITCH - pitch) * ROW_HEIGHT;
+    if (y < v.scrollTop) v.scrollTop = y;
+    if (y + ROW_HEIGHT > v.scrollTop + v.clientHeight)
+      v.scrollTop = y + ROW_HEIGHT - v.clientHeight;
+  }
   function key(e: KeyboardEvent<HTMLDivElement>) {
-    if (gesture.current) return;
+    if (gesture.current || e.metaKey || e.ctrlKey) return;
     const hit = notes.find(
       (n) =>
         n.pitch === cursor.pitch &&
@@ -144,18 +196,19 @@ export function PianoRoll({
     if (!dx && !dy) return;
     if (e.shiftKey && hit) {
       const n = dx
-        ? { ...hit, length: clamp(hit.length + dx, 1, 16 - hit.start) }
+        ? resizeNote(hit, hit.start + hit.length - 1 + dx)
         : moveNote(hit, 0, dy);
       onChange(placeNote(notes, n));
       setCursor({ start: n.start, pitch: n.pitch });
-      if (dy) onPreview(n.pitch);
+      reveal(n.pitch);
+      if (dy && n.pitch !== hit.pitch) onPreview(n.pitch);
     } else {
       const next = {
         start: clamp(cursor.start + dx, 0, 15),
-        pitch: clamp(cursor.pitch + dy, 0, 24),
+        pitch: clamp(cursor.pitch + dy, MIN_PITCH, MAX_PITCH),
       };
       setCursor(next);
-      if (dy) onPreview(next.pitch);
+      reveal(next.pitch);
     }
   }
   function label(pitch: number) {
@@ -171,73 +224,91 @@ export function PianoRoll({
             <span key={i}>{i % 4 === 0 ? i / 4 + 1 : "·"}</span>
           ))}
         </div>
-        <div className="piano-body">
-          <div className="piano-keys">
-            {Array.from({ length: 25 }, (_, i) => {
-              const pitch = 24 - i;
-              return (
-                <button
-                  key={pitch}
-                  className={label(pitch).includes("♯") ? "black-key" : ""}
-                  aria-label={`Preview ${label(pitch)}`}
-                  onClick={() => onPreview(pitch)}
-                >
-                  {label(pitch)}
-                </button>
-              );
-            })}
-          </div>
-          <div
-            ref={grid}
-            className="note-grid"
-            role="grid"
-            aria-label="Piano roll. Drag empty space to draw a note and its length. Tap a note to erase; drag to move. Arrow keys select a cell; Enter toggles a note. Shift arrows resize or transpose a note."
-            tabIndex={0}
-            onKeyDown={key}
-            onPointerDown={down}
-            onPointerMove={move}
-            onPointerUp={(e) => finish(e)}
-            onPointerCancel={(e) => finish(e, true)}
-            onLostPointerCapture={(e) => {
-              if (gesture.current) finish(e, true);
-            }}
-          >
-            {Array.from({ length: 25 }, (_, i) => (
-              <div
-                className={`piano-row ${label(24 - i).includes("♯") ? "dark-row" : ""}`}
-                key={i}
-              />
-            ))}
-            {shown.map((n) => (
-              <div
-                key={n.id}
-                data-note={n.id}
-                role="gridcell"
-                aria-label={`${label(n.pitch)}, step ${n.start + 1}, length ${n.length}`}
-                className={`piano-note ${draft?.id === n.id ? "note-draft" : ""}`}
-                style={{
-                  left: `${(n.start / 16) * 100}%`,
-                  top: `${((24 - n.pitch) / 25) * 100}%`,
-                  width: `${(n.length / 16) * 100}%`,
-                  height: "4%",
-                }}
-              >
-                <span />
-              </div>
-            ))}
+        <div
+          ref={viewport}
+          className="pitch-viewport"
+          onScroll={() => {
+            if (gesture.current?.mode === "empty") gesture.current.moved = true;
+          }}
+          onWheel={() => {
+            if (gesture.current?.mode === "empty") gesture.current.moved = true;
+          }}
+        >
+          <div className="piano-body">
+            <div className="piano-keys">
+              {Array.from({ length: ROWS }, (_, i) => {
+                const pitch = MAX_PITCH - i;
+                return (
+                  <button
+                    key={pitch}
+                    className={label(pitch).includes("♯") ? "black-key" : ""}
+                    aria-label={`Preview ${label(pitch)}`}
+                    onClick={() => onPreview(pitch)}
+                  >
+                    {label(pitch)}
+                  </button>
+                );
+              })}
+            </div>
             <div
-              className="note-cursor"
-              style={{
-                left: `${(cursor.start / 16) * 100}%`,
-                top: `${((24 - cursor.pitch) / 25) * 100}%`,
+              ref={grid}
+              className="note-grid"
+              style={{ height: ROWS * ROW_HEIGHT }}
+              role="grid"
+              aria-label="Piano roll. Tap empty space to add a note. Tap a note to erase silently. Scroll or drag empty space to browse pitches. Drag notes to move; drag their right edge to resize. Arrow keys select; Enter toggles notes; Shift arrows resize or transpose."
+              tabIndex={0}
+              onKeyDown={key}
+              onPointerDown={down}
+              onPointerMove={move}
+              onPointerUp={(e) => finish(e)}
+              onPointerCancel={(e) => finish(e, true)}
+              onLostPointerCapture={(e) => {
+                if (gesture.current) finish(e, true);
               }}
-            />
-            {step >= 0 && (
+            >
+              {Array.from({ length: ROWS }, (_, i) => (
+                <div
+                  className={`piano-row ${label(MAX_PITCH - i).includes("♯") ? "dark-row" : ""}`}
+                  key={i}
+                />
+              ))}
+              {shown.map((n) => (
+                <div
+                  key={n.id}
+                  data-note={n.id}
+                  role="gridcell"
+                  aria-label={`${label(n.pitch)}, step ${n.start + 1}, length ${n.length}`}
+                  className={`piano-note ${draft?.id === n.id ? "note-draft" : ""}`}
+                  style={{
+                    left: `${(n.start / 16) * 100}%`,
+                    top: (MAX_PITCH - n.pitch) * ROW_HEIGHT,
+                    width: `${(n.length / 16) * 100}%`,
+                    height: ROW_HEIGHT,
+                  }}
+                >
+                  <span />
+                  <i
+                    data-resize="true"
+                    className="note-resize"
+                    title="Drag to resize note"
+                  />
+                </div>
+              ))}
               <div
-                className="piano-playhead"
-                style={{ left: `${((step % 16) / 16) * 100}%` }}
+                className="note-cursor"
+                style={{
+                  left: `${(cursor.start / 16) * 100}%`,
+                  top: (MAX_PITCH - cursor.pitch) * ROW_HEIGHT,
+                  height: ROW_HEIGHT,
+                }}
               />
-            )}
+              {step >= 0 && (
+                <div
+                  className="piano-playhead"
+                  style={{ left: `${((step % 16) / 16) * 100}%` }}
+                />
+              )}
+            </div>
           </div>
         </div>
       </div>

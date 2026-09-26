@@ -1,3 +1,5 @@
+export const MIN_PITCH = -36;
+export const MAX_PITCH = 60;
 export type Wave = "sine" | "triangle" | "sawtooth" | "square" | "noise";
 export type Note = { id: string; start: number; pitch: number; length: number };
 export type Clip = { notes: Note[] };
@@ -189,14 +191,15 @@ export function parseProject(raw: string): Project {
         };
       }
       const noteIds = new Set();
-      if (c.notes.length > 400) throw Error("Too many notes.");
+      if (c.notes.length > 16 * (MAX_PITCH - MIN_PITCH + 1))
+        throw Error("Too many notes.");
       for (const n of c.notes) {
         if (
           !n ||
           typeof n.id !== "string" ||
           noteIds.has(n.id) ||
           !integer(n.start, 0, 15) ||
-          !integer(n.pitch, 0, 24) ||
+          !integer(n.pitch, MIN_PITCH, MAX_PITCH) ||
           !integer(n.length, 1, 16 - n.start)
         )
           throw Error("Invalid note pattern.");

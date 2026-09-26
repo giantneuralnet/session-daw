@@ -203,7 +203,10 @@ export class AudioEngine {
     } else {
       const s = this.ctx.createOscillator();
       s.type = t.wave;
-      const frequency = t.frequency * Math.pow(2, n / 12);
+      const frequency = Math.min(
+        this.ctx.sampleRate * 0.45,
+        t.frequency * Math.pow(2, n / 12),
+      );
       s.frequency.setValueAtTime(
         t.kind === "kick" ? frequency * 3 : frequency,
         time,

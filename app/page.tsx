@@ -4,6 +4,9 @@ import {
   Play,
   ArrowDown,
   ArrowUp,
+  Undo2,
+  Redo2,
+  ClipboardPaste,
   Square,
   Circle,
   Plus,
@@ -19,6 +22,8 @@ import {
   Power,
   Music2,
 } from "lucide-react";
+import { History } from "../lib/history";
+import { pasteNotes } from "../lib/piano-roll";
 import { PianoRoll } from "./PianoRoll";
 import { AudioEngine } from "../lib/audio";
 import {
@@ -159,8 +164,11 @@ export default function Session() {
     [levels, setLevels] = useState<Record<string, number>>({}),
     [showRecord, setShowRecord] = useState(false),
     [takeUrl, setTakeUrl] = useState(""),
-    [atEditor, setAtEditor] = useState(false);
-  const state = useRef(project),
+    [atEditor, setAtEditor] = useState(false),
+    [historyRevision, setHistoryRevision] = useState(0),
+    [clipboard, setClipboard] = useState<Note[] | null>(null);
+  const history = useRef(new History<Project>()),
+    state = useRef(project),
     engine = useRef<AudioEngine | null>(null),
     file = useRef<HTMLInputElement>(null),
     editor = useRef<HTMLElement>(null),
@@ -170,17 +178,53 @@ export default function Session() {
   const track =
       project.tracks.find((t) => t.id === selected) || project.tracks[0],
     clip = track.clips[clipIndex];
-  function edit(fn: (p: Project) => Project) {
+  function edit(fn: (p: Project) => Project, remember = true) {
     const next = fn(state.current);
+    if (remember && history.current.commit(state.current, next))
+      setHistoryRevision((v) => v + 1);
     state.current = next;
     setProject(next);
   }
   function updateTrack(id: string, patch: Partial<Track>) {
-    edit((p) => ({
-      ...p,
-      tracks: p.tracks.map((t) => (t.id === id ? { ...t, ...patch } : t)),
-    }));
+    edit(
+      (p) => ({
+        ...p,
+        tracks: p.tracks.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+      }),
+      Object.keys(patch).some((key) => key !== "active"),
+    );
   }
+  function restoreHistory(direction: "undo" | "redo") {
+    const next = history.current[direction](state.current);
+    if (!next) return;
+    engine.current?.pending.clear();
+    setQueued({});
+    state.current = next;
+    setProject(next);
+    engine.current?.update(next);
+    const destination =
+      next.tracks.find((t) => t.id === selected) ?? next.tracks[0];
+    setSelected(destination.id);
+    setClipIndex((i) => Math.min(i, destination.clips.length - 1));
+    setHistoryRevision((v) => v + 1);
+  }
+  function copyPattern() {
+    if (!clip?.notes.length) return;
+    setClipboard(structuredClone(clip.notes));
+    setMessage("Notes copied");
+  }
+  function pastePattern() {
+    if (clipboard) updateNotes(pasteNotes(clipboard));
+  }
+  useEffect(() => {
+    const end = () => history.current.end();
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    return () => {
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+    };
+  }, []);
   useEffect(() => {
     engine.current?.update(project);
   }, [project]);
@@ -282,6 +326,26 @@ export default function Session() {
   }
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey) {
+        const key = e.key.toLowerCase();
+        if (key === "z" || key === "y") {
+          e.preventDefault();
+          restoreHistory(key === "y" || e.shiftKey ? "redo" : "undo");
+          return;
+        }
+        if (tab === "pattern" && editor.current?.contains(e.target as Node)) {
+          if (key === "c") {
+            e.preventDefault();
+            copyPattern();
+            return;
+          }
+          if (key === "v") {
+            e.preventDefault();
+            pastePattern();
+            return;
+          }
+        }
+      }
       if (
         e.code === "Space" &&
         !["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(
@@ -435,7 +499,13 @@ export default function Session() {
     (t) => t.active >= 0 && !t.mute,
   ).length;
   return (
-    <main>
+    <main
+      onPointerDownCapture={(e) => {
+        const target = e.target as HTMLInputElement;
+        if (target.tagName === "INPUT" && target.type === "range")
+          history.current.begin();
+      }}
+    >
       <header className="transport">
         <div className="transport-left">
           <div className="play-controls">
@@ -494,6 +564,24 @@ export default function Session() {
           </div>
         </div>
         <div className="file-controls">
+          <div className="history-controls">
+            <button
+              aria-label="Undo"
+              title="Undo · Ctrl/⌘ Z"
+              disabled={!history.current.canUndo}
+              onClick={() => restoreHistory("undo")}
+            >
+              <Undo2 size={15} />
+            </button>
+            <button
+              aria-label="Redo"
+              title="Redo · Ctrl/⌘ Shift Z"
+              disabled={!history.current.canRedo}
+              onClick={() => restoreHistory("redo")}
+            >
+              <Redo2 size={15} />
+            </button>
+          </div>
           <button
             onClick={startFresh}
             disabled={recording || encoding}
@@ -591,7 +679,7 @@ export default function Session() {
                                 style={{
                                   left: `${(n.start / 16) * 100}%`,
                                   width: `${(n.length / 16) * 100}%`,
-                                  bottom: `${(n.pitch / 24) * 100}%`,
+                                  bottom: `${Math.max(0, Math.min(100, ((n.pitch + 36) / 96) * 100))}%`,
                                 }}
                               />
                             ))}
@@ -932,6 +1020,22 @@ export default function Session() {
             <div className="pattern-toolbar">
               <span>1 bar · 1/16</span>
               <button
+                onClick={copyPattern}
+                disabled={!clip?.notes.length}
+                title="Copy all notes · Ctrl/⌘ C"
+              >
+                <Copy size={12} />
+                Copy
+              </button>
+              <button
+                onClick={pastePattern}
+                disabled={!clipboard}
+                title="Paste notes · Ctrl/⌘ V"
+              >
+                <ClipboardPaste size={12} />
+                Paste
+              </button>
+              <button
                 onClick={() => updateNotes([])}
                 disabled={!clip?.notes.length}
               >
@@ -941,6 +1045,7 @@ export default function Session() {
             <PianoRoll
               key={track.id + ":" + clipIndex}
               notes={clip?.notes ?? []}
+              revision={historyRevision}
               onChange={updateNotes}
               onPreview={previewPitch}
               frequency={track.frequency}

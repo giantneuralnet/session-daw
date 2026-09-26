@@ -1,4 +1,4 @@
-import type { Note } from "./session";
+import { MIN_PITCH, MAX_PITCH, type Note } from "./session.ts";
 export const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
 export function drawNote(
@@ -11,7 +11,7 @@ export function drawNote(
   return {
     id,
     start,
-    pitch: clamp(pitch, 0, 24),
+    pitch: clamp(pitch, MIN_PITCH, MAX_PITCH),
     length: clamp(Math.abs(end - anchor) + 1, 1, 16 - start),
   };
 }
@@ -19,8 +19,11 @@ export function moveNote(note: Note, steps: number, rows: number): Note {
   return {
     ...note,
     start: clamp(note.start + steps, 0, 16 - note.length),
-    pitch: clamp(note.pitch + rows, 0, 24),
+    pitch: clamp(note.pitch + rows, MIN_PITCH, MAX_PITCH),
   };
+}
+export function resizeNote(note: Note, end: number): Note {
+  return { ...note, length: clamp(end - note.start + 1, 1, 16 - note.start) };
 }
 export function placeNote(notes: Note[], note: Note): Note[] {
   return [
@@ -35,4 +38,25 @@ export function placeNote(notes: Note[], note: Note): Note[] {
     ),
     note,
   ];
+}
+export function pasteNotes(
+  notes: Note[],
+  id = () => crypto.randomUUID(),
+): Note[] {
+  return notes.map((n) => ({ ...n, id: id() }));
+}
+export function finishGesture(
+  notes: Note[],
+  mode: "empty" | "move" | "resize",
+  original: Note,
+  draft: Note,
+  moved: boolean,
+): { notes: Note[]; preview: number | null } {
+  if (mode === "empty")
+    return moved
+      ? { notes, preview: null }
+      : { notes: placeNote(notes, original), preview: original.pitch };
+  if (mode === "move" && !moved)
+    return { notes: notes.filter((n) => n.id !== original.id), preview: null };
+  return { notes: placeNote(notes, draft), preview: null };
 }

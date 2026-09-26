@@ -16,6 +16,8 @@ test("production server renders the session controls without starter content", a
   assert.match(html, /New empty session/);
   assert.match(html, /Play A1 and edit/);
   assert.match(html, /Scroll to note editor/);
+  assert.match(html, /aria-label="Undo"/);
+  assert.match(html, /aria-label="Redo"/);
   assert.match(html, /Add row/);
   assert.doesNotMatch(
     html,
