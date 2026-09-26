@@ -2019,3 +2019,139 @@ body {
   line-height: 1.5;
   color: #b5adc8;
 }
+.sound-editor > .sound-recorder {
+  grid-column: 1 / -1;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
+  margin-bottom: 18px;
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(180px, 1fr);
+  gap: 10px 24px;
+  min-width: 0;
+}
+.sound-recorder .section-label {
+  grid-column: 1 / -1;
+  height: auto;
+  min-height: 23px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sound-recorder .section-label span {
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #9b9da8;
+}
+.capture-controls,
+.reconstruction-actions,
+.frequency-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sound-recorder button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid #40424d;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.sound-recorder button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.sound-recorder button[aria-pressed="true"],
+.sound-recorder .reconstruct-button {
+  border-color: var(--track);
+  color: var(--track);
+  background: color-mix(in srgb, var(--track) 10%, transparent);
+}
+.sound-recorder button.capturing {
+  color: #f38b94;
+  border-color: #cb6874;
+}
+.capture-meter {
+  height: 5px;
+  min-width: 40px;
+  max-width: 170px;
+  flex: 1;
+  background: #30323a;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.capture-meter i {
+  display: block;
+  height: 100%;
+  background: var(--track);
+  transition: width 0.08s;
+}
+.capture-controls output {
+  color: #9b9da8;
+  min-width: 40px;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+.sound-recorder .frequency-count {
+  margin: 0;
+}
+.frequency-options {
+  grid-column: 2;
+  gap: 5px;
+}
+.frequency-options button {
+  flex: 1;
+  min-width: 26px;
+  padding: 5px;
+  min-height: 30px;
+}
+.reconstruction-actions {
+  grid-column: 1;
+  grid-row: 3;
+}
+.capture-status,
+.capture-error {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: #9b9da8;
+  min-height: 14px;
+}
+.capture-status:empty {
+  display: none;
+}
+.capture-error {
+  color: #f3a0a8;
+  margin: 0;
+}
+.recorded-spectrum {
+  width: 100%;
+  height: 65px;
+  position: relative;
+  overflow: hidden;
+}
+.recorded-spectrum i {
+  position: absolute;
+  bottom: 0;
+  width: 2px;
+  min-height: 1px;
+  opacity: 0.8;
+}
+@media (max-width: 650px) {
+  .sound-editor > .sound-recorder {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .frequency-options,
+  .reconstruction-actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .sound-recorder button {
+    min-height: 40px;
+  }
+}

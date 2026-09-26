@@ -4,6 +4,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { initialProject, parseProject } from "../lib/session.ts";
 import { AudioEngine } from "../lib/audio.ts";
+import { analyzeSound, SAMPLE_RATE } from "../lib/resynthesis.ts";
 import { Mp3Encoder } from "../public/audio/lamejs.js";
 test("JSON preserves synthesis, patterns, and mixer settings without audio data", () => {
   const original = initialProject();
@@ -38,6 +39,7 @@ class Node {
   gain = new Param();
   pan = new Param();
   frequency = new Param();
+  playbackRate = new Param();
   Q = new Param();
   delayTime = new Param();
   threshold = new Param();
@@ -50,8 +52,12 @@ class Node {
   }
   connect() {}
   disconnect() {}
-  start() {}
-  stop() {}
+  start(time) {
+    this.started = time;
+  }
+  stop(time) {
+    this.stopped = time;
+  }
 }
 class Context {
   currentTime = 0;
@@ -82,7 +88,10 @@ class Context {
     return new Node();
   }
   createBufferSource() {
-    return new Node();
+    const node = new Node();
+    this.bufferSources ??= [];
+    this.bufferSources.push(node);
+    return node;
   }
   createBuffer(c, n) {
     return { getChannelData: () => new Float32Array(n) };
@@ -91,6 +100,32 @@ class Context {
   async close() {}
 }
 globalThis.AudioContext = Context;
+test("reconstructed instruments play from spectral data, transpose, obey note lengths and stop", () => {
+  const p = initialProject(),
+    t = p.tracks[2];
+  t.kind = "recorded";
+  t.reconstruction = analyzeSound(
+    Float32Array.from(
+      { length: SAMPLE_RATE },
+      (_, i) => 0.2 * Math.sin((i * 2 * Math.PI * 440) / SAMPLE_RATE),
+    ),
+  );
+  t.frequency = t.reconstruction.referenceFrequency;
+  const e = new AudioEngine(p);
+  assert.ok(e.reconstructedBuffers.has(t.reconstruction));
+  e.note(t, 12, 0, 0.125);
+  const normal = e.ctx.bufferSources.at(-1);
+  assert.equal(normal.playbackRate.value, 2);
+  assert.equal(normal.buffer, e.reconstructedBuffers.get(t.reconstruction));
+  assert.ok(normal.stopped <= 0.51);
+  e.note(t, 0, 0, 0.1, true);
+  const preview = e.ctx.bufferSources.at(-1);
+  assert.equal(preview.stopped, 1.01);
+  assert.equal(e.voices.size, 2);
+  e.stop();
+  assert.equal(normal.stopped, 0.025);
+  assert.equal(preview.stopped, 0.025);
+});
 test("clip launches align at bar boundaries and every instrument shares one clock", () => {
   const p = initialProject();
   const e = new AudioEngine(p);

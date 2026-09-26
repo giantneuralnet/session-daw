@@ -1,3 +1,4 @@
+import { validReconstruction, type Reconstruction } from "./resynthesis.ts";
 export const MIN_PITCH = -36;
 export const MAX_PITCH = 60;
 export type Wave = "sine" | "triangle" | "sawtooth" | "square" | "noise";
@@ -20,7 +21,8 @@ export type Track = {
   solo: boolean;
   active: number;
   clips: (Clip | null)[];
-  kind: "synth" | "kick" | "hat";
+  kind: "synth" | "kick" | "hat" | "recorded";
+  reconstruction?: Reconstruction;
 };
 export type Project = {
   version: 2;
@@ -160,7 +162,7 @@ export function parseProject(raw: string): Project {
       t.name.length > 40 ||
       !/^#[0-9a-f]{6}$/i.test(t.color) ||
       !["sine", "triangle", "square", "sawtooth", "noise"].includes(t.wave) ||
-      !["synth", "kick", "hat"].includes(t.kind) ||
+      !["synth", "kick", "hat", "recorded"].includes(t.kind) ||
       typeof t.mute !== "boolean" ||
       typeof t.solo !== "boolean" ||
       !integer(t.active, -1, rows - 1) ||
@@ -169,6 +171,12 @@ export function parseProject(raw: string): Project {
     )
       throw Error("Invalid track settings.");
     ids.add(t.id);
+    if (
+      (t.reconstruction !== undefined &&
+        !validReconstruction(t.reconstruction)) ||
+      (t.kind === "recorded" && !t.reconstruction)
+    )
+      throw Error("Invalid recorded instrument.");
     for (const [key, min, max] of [
       ["frequency", 20, 2000],
       ["attack", 0.001, 2],

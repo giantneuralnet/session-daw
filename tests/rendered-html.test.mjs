@@ -28,6 +28,10 @@ test("production server renders the session controls without starter content", a
   assert.doesNotMatch(html, /Add row|track-header|row-label-spacer/);
   assert.match(html, /Closed hat/);
   assert.match(html, /Warm pad/);
+  assert.match(html, /Record sound/);
+  assert.match(html, /Reconstruction frequencies/);
+  assert.match(html, /Reconstruct/);
+  assert.match(html, /5 seconds max/);
   assert.doesNotMatch(
     html,
     /Session name|Track name|master-strip|Four on the floor/,

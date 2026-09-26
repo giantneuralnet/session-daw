@@ -1,4 +1,5 @@
 import { TailMonitor } from "./tail-monitor.ts";
+import { renderSound, type Reconstruction } from "./resynthesis.ts";
 import type { Project, Track } from "./session";
 type Channel = {
   input: GainNode;
@@ -36,6 +37,7 @@ export class AudioEngine {
   onRecordingFinalizing: () => void = () => {};
   previewStop?: () => void;
   previewSerial = 0;
+  reconstructedBuffers = new WeakMap<Reconstruction, AudioBuffer>();
   onRecorded: (blob: Blob) => void = () => {};
   onError: (message: string) => void = () => {};
   constructor(project: Project) {
@@ -66,6 +68,12 @@ export class AudioEngine {
         this.pending.delete(id);
       }
     for (const t of p.tracks) {
+      if (
+        t.kind === "recorded" &&
+        t.reconstruction &&
+        !this.reconstructedBuffers.has(t.reconstruction)
+      )
+        this.cacheReconstruction(t.reconstruction);
       let c = this.channels.get(t.id);
       if (!c) {
         const input = this.ctx.createGain(),
@@ -228,6 +236,12 @@ export class AudioEngine {
       this.next += 60 / this.project.bpm / 4;
     }
   }
+  cacheReconstruction(model: Reconstruction, samples = renderSound(model)) {
+    const buffer = this.ctx.createBuffer(1, samples.length, model.sampleRate);
+    buffer.getChannelData(0).set(samples);
+    this.reconstructedBuffers.set(model, buffer);
+    return buffer;
+  }
   note(t: Track, n: number, time: number, gate = 0.125, preview = false) {
     const c = this.channels.get(t.id);
     if (!c) return;
@@ -237,9 +251,30 @@ export class AudioEngine {
     filter.frequency.value = t.cutoff;
     filter.Q.value = 0.7;
     let source: OscillatorNode | AudioBufferSourceNode;
-    const hold = t.kind === "synth" ? Math.max(gate, t.attack) : t.attack;
-    const duration = hold + t.decay + 0.03;
-    if (t.wave === "noise") {
+    let hold =
+      t.kind === "synth" || t.kind === "recorded"
+        ? Math.max(gate, t.attack)
+        : t.attack;
+    let duration = hold + t.decay + 0.03;
+    if (t.kind === "recorded" && t.reconstruction) {
+      const model = t.reconstruction;
+      const s = this.ctx.createBufferSource();
+      s.buffer =
+        this.reconstructedBuffers.get(model) ?? this.cacheReconstruction(model);
+      const rate = Math.max(
+        0.01,
+        Math.min(
+          64,
+          (t.frequency / model.referenceFrequency) * Math.pow(2, n / 12),
+        ),
+      );
+      s.playbackRate.value = rate;
+      const fullDuration = model.length / model.sampleRate / rate;
+      duration = preview ? fullDuration : Math.min(duration, fullDuration);
+      hold = Math.min(hold, Math.max(0.001, duration - 0.01));
+      if (preview) hold = Math.max(0.001, duration - 0.01);
+      source = s;
+    } else if (t.wave === "noise") {
       const b = this.ctx.createBuffer(
           1,
           Math.ceil(this.ctx.sampleRate * duration),
@@ -266,11 +301,9 @@ export class AudioEngine {
       source = s;
     }
     env.gain.setValueAtTime(0.0001, time);
-    env.gain.linearRampToValueAtTime(
-      t.kind === "kick" ? 0.9 : 0.3,
-      time + t.attack,
-    );
-    env.gain.setValueAtTime(t.kind === "kick" ? 0.9 : 0.3, time + hold);
+    const level = t.kind === "kick" ? 0.9 : t.kind === "recorded" ? 0.8 : 0.3;
+    env.gain.linearRampToValueAtTime(level, time + Math.min(t.attack, hold));
+    env.gain.setValueAtTime(level, time + hold);
     env.gain.exponentialRampToValueAtTime(0.0001, time + duration);
     source.connect(filter);
     filter.connect(env);

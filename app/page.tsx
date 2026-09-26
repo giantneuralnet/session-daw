@@ -29,6 +29,7 @@ import { soundPresets } from "../lib/presets";
 import { History } from "../lib/history";
 import { pasteNotes } from "../lib/piano-roll";
 import { PianoRoll } from "./PianoRoll";
+import { SoundRecorder } from "./SoundRecorder";
 import { AudioEngine } from "../lib/audio";
 import {
   initialProject,
@@ -177,6 +178,7 @@ export default function Session() {
     [bpmError, setBpmError] = useState(""),
     [sharing, setSharing] = useState(false),
     [shareStatus, setShareStatus] = useState("");
+  const [previewStopRevision, setPreviewStopRevision] = useState(0);
   const history = useRef(new History<Project>()),
     state = useRef(project),
     engine = useRef<AudioEngine | null>(null),
@@ -412,6 +414,7 @@ export default function Session() {
     }
   }
   function stop() {
+    setPreviewStopRevision((v) => v + 1);
     engine.current?.stop();
     setPlaying(false);
     setStep(-1);
@@ -569,7 +572,8 @@ export default function Session() {
   async function load(f?: File) {
     if (!f) return;
     try {
-      if (f.size > 1024 * 1024) throw Error("Session file is too large.");
+      if (f.size > 64 * 1024 * 1024)
+        throw Error("Session file is too large (64 MB maximum).");
       const p = parseProject(await f.text());
       stop();
       edit(() => ({
@@ -1007,6 +1011,24 @@ export default function Session() {
                 </div>
               ))}
             </div>
+            <SoundRecorder
+              key={track.id}
+              reconstruction={track.reconstruction}
+              active={track.kind === "recorded"}
+              stopRevision={previewStopRevision}
+              onCaptureStart={stop}
+              onApply={(reconstruction, samples) => {
+                getEngine().cacheReconstruction(reconstruction, samples);
+                updateTrack(track.id, {
+                  kind: "recorded",
+                  reconstruction,
+                  frequency: reconstruction.referenceFrequency,
+                  attack: 0.005,
+                  decay: 0.1,
+                  cutoff: 18000,
+                });
+              }}
+            />
             <div className="oscillator">
               <div className="section-label">
                 OSCILLATOR{" "}
@@ -1024,8 +1046,12 @@ export default function Session() {
                     key={w}
                     title={w}
                     aria-label={`${w} wave`}
-                    aria-pressed={track.wave === w}
-                    className={track.wave === w ? "chosen" : ""}
+                    aria-pressed={track.kind !== "recorded" && track.wave === w}
+                    className={
+                      track.kind !== "recorded" && track.wave === w
+                        ? "chosen"
+                        : ""
+                    }
                     onClick={() =>
                       updateTrack(track.id, {
                         wave: w,
@@ -1036,14 +1062,45 @@ export default function Session() {
                     <Waveform
                       small
                       wave={w}
-                      color={track.wave === w ? track.color : "#777983"}
+                      color={
+                        track.kind !== "recorded" && track.wave === w
+                          ? track.color
+                          : "#777983"
+                      }
                     />
                   </button>
                 ))}
               </div>
               <div className="wave-display">
-                <Waveform wave={track.wave} color={track.color} />
-                <span>{track.wave}</span>
+                {track.kind === "recorded" && track.reconstruction ? (
+                  <div
+                    className="recorded-spectrum"
+                    role="img"
+                    aria-label="Reconstructed frequency spectrum"
+                  >
+                    {(
+                      track.reconstruction.frames[
+                        Math.floor(track.reconstruction.frames.length / 2)
+                      ] ?? []
+                    )
+                      .slice(0, track.reconstruction.count)
+                      .map((p) => (
+                        <i
+                          key={p.frequency}
+                          style={{
+                            left: `${Math.max(0, (Math.log(p.frequency / 10) / Math.log(1200)) * 100)}%`,
+                            height: `${Math.min(90, Math.sqrt(p.amplitude) * 160)}%`,
+                            background: track.color,
+                          }}
+                        />
+                      ))}
+                  </div>
+                ) : (
+                  <Waveform wave={track.wave} color={track.color} />
+                )}
+                <span>
+                  {track.kind === "recorded" ? "reconstructed" : track.wave}
+                </span>
                 <span>{track.frequency.toFixed(2)} Hz</span>
               </div>
               <Control
