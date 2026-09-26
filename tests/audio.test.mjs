@@ -176,3 +176,45 @@ test("MP3 encoder accepts worklet-sized stereo blocks and generates valid MPEG f
   assert.equal(data[1] & 224, 224);
   fs.writeFileSync("/tmp/daw-encoding-test.mp3", data);
 });
+
+test("note gate lengths are passed to every polyphonic voice in seconds", () => {
+  const p = initialProject();
+  p.bpm = 120;
+  p.tracks = p.tracks.slice(0, 1);
+  p.tracks[0].active = 0;
+  p.tracks[0].clips[0] = {
+    notes: [
+      { id: "a", start: 0, pitch: 0, length: 4 },
+      { id: "b", start: 0, pitch: 7, length: 8 },
+    ],
+  };
+  const e = new AudioEngine(p);
+  const notes = [];
+  e.note = (t, pitch, time, gate) => notes.push({ pitch, time, gate });
+  e.playing = true;
+  e.tick();
+  assert.deepEqual(notes, [
+    { pitch: 0, time: 0, gate: 0.5 },
+    { pitch: 7, time: 0, gate: 1 },
+  ]);
+});
+test("long notes sustain longer while preview remains audible on a muted track", async () => {
+  const p = initialProject(),
+    e = new AudioEngine(p),
+    oscillators = [];
+  e.ctx.createOscillator = () => {
+    const n = new Node();
+    n.stop = (time) => (n.end = time);
+    oscillators.push(n);
+    return n;
+  };
+  const t = { ...p.tracks[2], mute: true };
+  e.note(t, 0, 0, 0.125);
+  e.note(t, 0, 0, 1);
+  assert.ok(Math.abs(oscillators[1].end - oscillators[0].end - 0.875) < 1e-9);
+  let seen;
+  e.note = (...args) => (seen = args);
+  await e.preview(t, 12);
+  assert.equal(seen[1], 12);
+  assert.equal(seen[4], true);
+});

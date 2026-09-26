@@ -7,9 +7,7 @@ import {
   Plus,
   FolderOpen,
   Download,
-  ChevronDown,
   Headphones,
-  Volume2,
   SlidersHorizontal,
   AudioLines,
   Trash2,
@@ -19,9 +17,14 @@ import {
   Power,
   Music2,
 } from "lucide-react";
+import { PianoRoll } from "./PianoRoll";
 import { AudioEngine } from "../lib/audio";
 import {
   initialProject,
+  emptyProject,
+  addRow,
+  columnLabel,
+  type Note,
   makeTrack,
   parseProject,
   type Track,
@@ -151,7 +154,6 @@ export default function Session() {
     [seconds, setSeconds] = useState(0),
     [message, setMessage] = useState(""),
     [tab, setTab] = useState<"sound" | "pattern">("sound"),
-    [level, setLevel] = useState(0),
     [levels, setLevels] = useState<Record<string, number>>({}),
     [showRecord, setShowRecord] = useState(false),
     [takeUrl, setTakeUrl] = useState("");
@@ -205,7 +207,6 @@ export default function Session() {
   }, [recording]);
   useEffect(() => {
     if (!playing) {
-      setLevel(0);
       setLevels({});
       return;
     }
@@ -223,10 +224,6 @@ export default function Session() {
             : 0;
       }
       setLevels(next);
-      e.analyser.getByteTimeDomainData(data);
-      setLevel(
-        Math.min(1, Math.max(...data.map((x) => Math.abs(x - 128))) / 70),
-      );
     }, 70);
     return () => clearInterval(id);
   }, [playing]);
@@ -306,17 +303,26 @@ export default function Session() {
   function launchClip(t: Track, index: number) {
     setSelected(t.id);
     setClipIndex(index);
+    setTab("pattern");
     if (!t.clips[index]) {
       const clips = [...t.clips];
-      clips[index] = {
-        name: `Pattern ${index + 1}`,
-        notes: Array(16).fill(-1),
-      };
+      clips[index] = { notes: [] };
       updateTrack(t.id, { clips });
-      setTab("pattern");
-      return;
     }
-    launch(t, (queued[t.id] ?? t.active) === index ? -1 : index);
+  }
+  function startFresh() {
+    stop();
+    engine.current?.dispose();
+    engine.current = null;
+    const fresh = emptyProject();
+    edit(() => fresh);
+    setSelected(fresh.tracks[0].id);
+    setClipIndex(0);
+    setTab("pattern");
+    setTake(null);
+    setSeconds(0);
+    setShowRecord(false);
+    setMessage("");
   }
   async function record() {
     if (recordBusy.current) return;
@@ -382,19 +388,20 @@ export default function Session() {
       setMessage("A session supports up to 16 tracks");
       return;
     }
-    const t = makeTrack(project.tracks.length);
+    const t = makeTrack(project.tracks.length, project.tracks[0].clips.length);
     edit((p) => ({ ...p, tracks: [...p.tracks, t] }));
     setSelected(t.id);
     setClipIndex(0);
   }
-  function setNote(i: number, n: number) {
-    if (!clip) return;
+  function updateNotes(notes: Note[]) {
     const clips = [...track.clips];
-    clips[clipIndex] = {
-      ...clip,
-      notes: clip.notes.map((v, j) => (i === j ? n : v)),
-    };
+    clips[clipIndex] = { notes };
     updateTrack(track.id, { clips });
+  }
+  function previewPitch(pitch: number) {
+    void getEngine()
+      .preview(track, pitch)
+      .catch(() => setMessage("Audio preview could not start."));
   }
   const activeCount = project.tracks.filter(
     (t) => t.active >= 0 && !t.mute,
@@ -459,6 +466,14 @@ export default function Session() {
           </div>
         </div>
         <div className="file-controls">
+          <button
+            onClick={startFresh}
+            disabled={recording || encoding}
+            title="New empty session"
+          >
+            <Plus size={15} />
+            <span>New</span>
+          </button>
           <button onClick={() => file.current?.click()}>
             <FolderOpen size={15} />
             <span>Open</span>
@@ -487,34 +502,28 @@ export default function Session() {
           onChange={(e) => void load(e.target.files?.[0])}
         />
       </header>
-      <section className="session-top">
-        <div className="session-title">
-          <span className="status-dot" />
-          <input
-            aria-label="Session name"
-            value={project.name}
-            maxLength={80}
-            onChange={(e) => edit((p) => ({ ...p, name: e.target.value }))}
-          />
-          <span className="session-badge">SESSION</span>
-        </div>
-        <div className="session-actions">
-          <span className="quantize">
-            Launch <b>1 bar</b>
-            <ChevronDown size={12} />
-          </span>
-          <button onClick={addTrack}>
-            <Plus size={15} />
-            Add track
-          </button>
-        </div>
-      </section>
       <section className="workspace">
         <div className="grid-scroll">
           <div
             className="tracks"
             style={{ "--count": project.tracks.length } as CSSProperties}
           >
+            <div className="row-labels">
+              <div className="row-label-spacer" />
+              {project.tracks[0].clips.map((_, j) => (
+                <button
+                  key={j}
+                  aria-label={`Launch row ${j + 1}`}
+                  onClick={() =>
+                    project.tracks.forEach((t) =>
+                      launch(t, t.clips[j] ? j : -1),
+                    )
+                  }
+                >
+                  {j + 1}
+                </button>
+              ))}
+            </div>
             {project.tracks.map((t, i) => (
               <div
                 key={t.id}
@@ -523,62 +532,71 @@ export default function Session() {
               >
                 <button
                   className="track-header"
-                  onClick={() => setSelected(t.id)}
+                  onClick={() => {
+                    setSelected(t.id);
+                    setTab("sound");
+                  }}
                 >
-                  <span className="track-num">
-                    {String(i + 1).padStart(2, "0")}
-                  </span>
-                  <b>{t.name}</b>
-                  <AudioLines size={14} />
+                  <span>{columnLabel(i)}</span>
                 </button>
                 <div className="clip-slots">
                   {t.clips.map((c, j) => (
-                    <button
+                    <div
                       key={j}
-                      onClick={() => launchClip(t, j)}
-                      aria-label={
-                        c
-                          ? `${t.name}: ${c.name}, ${(queued[t.id] ?? t.active) === j ? "stop" : "launch"}`
-                          : `Create ${t.name} clip ${j + 1}`
-                      }
-                      className={`clip ${c ? "filled" : "empty"} ${t.active === j ? "on" : ""} ${queued[t.id] === j ? "queued" : ""}`}
+                      className={`clip ${c ? "filled" : "empty"} ${t.active === j ? "on" : ""} ${queued[t.id] === j ? "queued" : ""} ${t.id === track.id && clipIndex === j ? "clip-selected" : ""}`}
                     >
-                      {c ? (
-                        <>
-                          <div className="clip-name">
-                            <Play
-                              size={11}
-                              fill={t.active === j ? "currentColor" : "none"}
-                            />
-                            <span>{c.name}</span>
-                            {queued[t.id] === j && <i className="queue-dot" />}
-                          </div>
+                      <button
+                        className="clip-edit"
+                        aria-label={`Edit ${columnLabel(i)}${j + 1}`}
+                        onClick={() => launchClip(t, j)}
+                      >
+                        <span className="clip-coordinate">
+                          {columnLabel(i)}
+                          {j + 1}
+                        </span>
+                        {c ? (
                           <div className="mini-notes">
-                            {c.notes.map((n, k) => (
+                            {c.notes.map((n) => (
                               <i
-                                key={k}
+                                key={n.id}
                                 style={{
-                                  opacity: n < 0 ? 0 : 1,
-                                  transform: `translateY(${-(n % 12) * 1.1}px)`,
+                                  left: `${(n.start / 16) * 100}%`,
+                                  width: `${(n.length / 16) * 100}%`,
+                                  bottom: `${(n.pitch / 24) * 100}%`,
                                 }}
                               />
                             ))}
                           </div>
-                          {t.active === j && (
-                            <div
-                              className="clip-progress"
-                              style={{
-                                width: playing
-                                  ? `${(((step % 16) + 1) / 16) * 100}%`
-                                  : "0%",
-                              }}
-                            />
-                          )}
-                        </>
-                      ) : (
-                        <Plus size={15} />
+                        ) : (
+                          <Plus size={12} />
+                        )}
+                      </button>
+                      {c && (
+                        <button
+                          className="clip-launch"
+                          title={`${(queued[t.id] ?? t.active) === j ? "Stop" : "Launch"} ${columnLabel(i)}${j + 1}`}
+                          aria-label={`${(queued[t.id] ?? t.active) === j ? "Stop" : "Launch"} ${columnLabel(i)}${j + 1}`}
+                          onClick={() =>
+                            launch(t, (queued[t.id] ?? t.active) === j ? -1 : j)
+                          }
+                        >
+                          <Play
+                            size={10}
+                            fill={t.active === j ? "currentColor" : "none"}
+                          />
+                        </button>
                       )}
-                    </button>
+                      {c && t.active === j && (
+                        <div
+                          className="clip-progress"
+                          style={{
+                            width: playing
+                              ? `${(((step % 16) + 1) / 16) * 100}%`
+                              : "0%",
+                          }}
+                        />
+                      )}
+                    </div>
                   ))}
                 </div>
                 <div className="track-stop">
@@ -681,70 +699,16 @@ export default function Session() {
             </div>
           </div>
         </div>
-        <aside className="master-strip">
-          <div className="master-header">
-            Master <Volume2 size={14} />
-          </div>
-          <div className="scenes">
-            {["01", "02", "03", "04"].map((s, j) => (
-              <button
-                key={s}
-                title={`Launch scene ${s}`}
-                onClick={() =>
-                  project.tracks.forEach((t) => launch(t, t.clips[j] ? j : -1))
-                }
-              >
-                <Play size={11} fill="currentColor" />
-                <span>{s}</span>
-              </button>
-            ))}
-          </div>
-          <div className="track-stop">
-            <button
-              title="Stop all clips"
-              aria-label="Stop all clips"
-              onClick={() => project.tracks.forEach((t) => launch(t, -1))}
-            >
-              <Square size={10} fill="currentColor" />
-            </button>
-            <span>Stop all</span>
-          </div>
-          <div className="master-mix">
-            <div className="master-output">
-              1 / 2 <Headphones size={12} />
-            </div>
-            <div className="fader-section">
-              <div className="fader-scale">
-                <span>0</span>
-                <span>−6</span>
-                <span>−12</span>
-                <span>−24</span>
-                <span>−∞</span>
-              </div>
-              <div className="fader">
-                <input
-                  aria-label="Master volume"
-                  type="range"
-                  min="0"
-                  max="1"
-                  step=".01"
-                  value={project.master}
-                  onChange={(e) =>
-                    edit((p) => ({ ...p, master: +e.target.value }))
-                  }
-                />
-              </div>
-              <div className="meter master-meter">
-                <i style={{ height: `${level * 100}%` }} />
-              </div>
-            </div>
-            <div className="volume-value">
-              {db(project.master)} <span>dB</span>
-            </div>
-            <span className="master-label">MASTER</span>
-          </div>
-        </aside>
       </section>
+      <div className="row-actions">
+        <button
+          onClick={() => edit(addRow)}
+          disabled={project.tracks[0].clips.length >= 64}
+        >
+          <Plus size={13} />
+          Add row
+        </button>
+      </div>
       <section
         className="device"
         style={{ "--track": track.color } as CSSProperties}
@@ -752,14 +716,9 @@ export default function Session() {
         <div className="device-top">
           <div className="device-name">
             <i style={{ background: track.color }} />
-            <input
-              aria-label="Track name"
-              maxLength={40}
-              value={track.name}
-              onChange={(e) => updateTrack(track.id, { name: e.target.value })}
-            />
-            <span>
-              {String(project.tracks.indexOf(track) + 1).padStart(2, "0")}
+            <span className="device-coordinate">
+              {columnLabel(project.tracks.indexOf(track))}
+              {tab === "pattern" ? clipIndex + 1 : ""}
             </span>
           </div>
           <div className="device-tabs">
@@ -941,83 +900,22 @@ export default function Session() {
         ) : (
           <div className="pattern-editor">
             <div className="pattern-toolbar">
-              <select
-                aria-label="Edit clip"
-                value={clipIndex}
-                onChange={(e) => setClipIndex(+e.target.value)}
-              >
-                {track.clips.map((c, i) => (
-                  <option key={i} value={i}>
-                    {c?.name || `Empty slot ${i + 1}`}
-                  </option>
-                ))}
-              </select>
-              {clip && (
-                <input
-                  aria-label="Clip name"
-                  value={clip.name}
-                  maxLength={60}
-                  onChange={(e) => {
-                    const clips = [...track.clips];
-                    clips[clipIndex] = { ...clip, name: e.target.value };
-                    updateTrack(track.id, { clips });
-                  }}
-                />
-              )}
-              <span>16 steps · 1 bar</span>
+              <span>1 bar · 1/16</span>
               <button
-                disabled={!clip}
-                onClick={() => {
-                  if (clip) {
-                    const clips = [...track.clips];
-                    clips[clipIndex] = { ...clip, notes: Array(16).fill(-1) };
-                    updateTrack(track.id, { clips });
-                  }
-                }}
+                onClick={() => updateNotes([])}
+                disabled={!clip?.notes.length}
               >
                 Clear
               </button>
             </div>
-            {clip ? (
-              <div className="step-grid">
-                {clip.notes.map((n, i) => (
-                  <div
-                    key={i}
-                    className={`${i % 4 === 0 ? "beat-start" : ""} ${playing && step % 16 === i ? "step-playing" : ""}`}
-                  >
-                    <span>{String(i + 1).padStart(2, "0")}</span>
-                    <button
-                      aria-label={`Step ${i + 1} ${n >= 0 ? "off" : "on"}`}
-                      aria-pressed={n >= 0}
-                      className={n >= 0 ? "note-on" : ""}
-                      onClick={() => setNote(i, n < 0 ? 0 : -1)}
-                    >
-                      {n >= 0 ? <i /> : <Plus size={12} />}
-                    </button>
-                    <select
-                      aria-label={`Step ${i + 1} pitch`}
-                      disabled={n < 0}
-                      value={Math.max(0, n)}
-                      onChange={(e) => setNote(i, +e.target.value)}
-                    >
-                      {Array.from({ length: 25 }, (_, j) => (
-                        <option value={j} key={j}>
-                          {j === 0 ? "Root" : `+${j}`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <button
-                className="create-pattern"
-                onClick={() => launchClip(track, clipIndex)}
-              >
-                <Plus size={16} />
-                Create pattern
-              </button>
-            )}
+            <PianoRoll
+              key={track.id + ":" + clipIndex}
+              notes={clip?.notes ?? []}
+              onChange={updateNotes}
+              onPreview={previewPitch}
+              frequency={track.frequency}
+              step={playing && track.active === clipIndex ? step : -1}
+            />
           </div>
         )}
       </section>

@@ -1,10 +1,10 @@
 # Session
 
-A minimal browser DAW. Synthesizers run locally with Web Audio. Each track has four one-bar clips with 16 steps. Clip launches and stops quantize to the next bar while the transport runs. Space starts/stops the transport.
+A minimal browser DAW. Synthesizers run locally with Web Audio. Columns are identified by letters and rows by numbers. Each clip is one bar with a 16-step time grid and 25 pitch rows. Add row extends the session grid up to 64 rows. Clip launches and stops quantize to the next bar while the transport runs. Space starts/stops the transport.
 
-Select Sound to edit wave shape, frequency, envelope, filter, reverb, and echo. Select Pattern to edit clip notes and pitches. Add tracks, duplicate tracks, or click empty slots to create clips. M and S control mute and solo. The master includes a 4:1 compressor.
+Select Sound to edit wave shape, frequency, envelope, filter, reverb, and echo. Click a clip cell to edit it in the piano roll. Drag empty space horizontally to draw a note and set its length; tap an existing note to erase it; drag notes to move them in time or pitch. Pitch changes play a short preview. Notes can overlap at different pitches for chords. Arrow keys move the editing cursor, Enter toggles a note, Delete erases, and Shift+arrows resize or transpose. Add columns with +, duplicate columns, or click empty slots to create clips. Use each clip’s triangle to launch or stop it and row numbers to launch a whole row. New clears the current session and starts with one empty column. M and S control mute and solo. The master includes a 4:1 compressor.
 
-Save downloads a versioned JSON description of the project: oscillators, pitches, patterns, effects and mixer settings. Open validates and restores that file. There are no stored waveform samples and no server-side audio storage.
+Save downloads a version 2 JSON description (including note start, pitch, and duration); original version 1 projects remain loadable. The file contains a description of the project: oscillators, pitches, patterns, effects and mixer settings. Open validates and restores that file. There are no stored waveform samples and no server-side audio storage.
 
 Record captures the live stereo master using AudioWorklet and encodes in a separate worker. Stop recording to preview or download a 192 kbps MP3. Recording requires a modern browser and HTTPS (or localhost). Keep the tab active for reliable scheduling. Unsaved projects and recordings live only in this tab; save JSON and export recordings before closing it.
 

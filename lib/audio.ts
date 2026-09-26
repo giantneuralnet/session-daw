@@ -26,6 +26,8 @@ export class AudioEngine {
   recorder?: AudioWorkletNode;
   worker?: Worker;
   recording = false;
+  previewStop?: () => void;
+  previewSerial = 0;
   onRecorded: (blob: Blob) => void = () => {};
   onError: (message: string) => void = () => {};
   constructor(project: Project) {
@@ -161,15 +163,22 @@ export class AudioEngine {
           this.pending.delete(id);
         }
       for (const t of this.project.tracks) {
-        const n = t.clips[t.active]?.notes[this.step % 16];
-        if (n !== undefined && n >= 0) this.note(t, n, this.next);
+        for (const n of t.clips[t.active]?.notes ?? []) {
+          if (n.start === this.step % 16)
+            this.note(
+              t,
+              n.pitch,
+              this.next,
+              (n.length * 60) / this.project.bpm / 4,
+            );
+        }
       }
       this.onStep(this.step, this.next);
       this.step++;
       this.next += 60 / this.project.bpm / 4;
     }
   }
-  note(t: Track, n: number, time: number) {
+  note(t: Track, n: number, time: number, gate = 0.125, preview = false) {
     const c = this.channels.get(t.id);
     if (!c) return;
     const env = this.ctx.createGain(),
@@ -178,7 +187,8 @@ export class AudioEngine {
     filter.frequency.value = t.cutoff;
     filter.Q.value = 0.7;
     let source: OscillatorNode | AudioBufferSourceNode;
-    const duration = t.attack + t.decay + 0.03;
+    const hold = t.kind === "synth" ? Math.max(gate, t.attack) : t.attack;
+    const duration = hold + t.decay + 0.03;
     if (t.wave === "noise") {
       const b = this.ctx.createBuffer(
           1,
@@ -207,10 +217,19 @@ export class AudioEngine {
       t.kind === "kick" ? 0.9 : 0.3,
       time + t.attack,
     );
+    env.gain.setValueAtTime(t.kind === "kick" ? 0.9 : 0.3, time + hold);
     env.gain.exponentialRampToValueAtTime(0.0001, time + duration);
     source.connect(filter);
     filter.connect(env);
-    env.connect(c.input);
+    env.connect(preview ? this.ctx.destination : c.input);
+    if (preview) {
+      this.previewStop?.();
+      this.previewStop = () => {
+        env.gain.cancelScheduledValues(this.ctx.currentTime);
+        env.gain.setTargetAtTime(0, this.ctx.currentTime, 0.005);
+        source.stop(this.ctx.currentTime + 0.025);
+      };
+    }
     source.start(time);
     source.stop(time + duration + 0.01);
     source.onended = () => {
@@ -219,10 +238,11 @@ export class AudioEngine {
       env.disconnect();
     };
   }
-  async preview(t: Track) {
+  async preview(t: Track, pitch = 0) {
+    const serial = ++this.previewSerial;
     await this.ctx.resume();
-    this.update(this.project);
-    this.note(t, 0, this.ctx.currentTime + 0.02);
+    if (serial !== this.previewSerial) return;
+    this.note(t, pitch, this.ctx.currentTime + 0.02, 0.1, true);
   }
   async record() {
     await this.ctx.resume();

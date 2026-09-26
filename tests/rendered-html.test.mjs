@@ -13,8 +13,13 @@ test("production server renders the session controls without starter content", a
   const html = await response.text();
   assert.match(html, /<title>Session<\/title>/);
   assert.match(html, /Export MP3/);
-  assert.match(html, /Untitled session/);
-  assert.match(html, /Four on the floor/);
+  assert.match(html, /New empty session/);
+  assert.match(html, /Edit A1/);
+  assert.match(html, /Add row/);
+  assert.doesNotMatch(
+    html,
+    /Session name|Track name|master-strip|Four on the floor/,
+  );
   assert.doesNotMatch(
     html,
     /codex-preview|Building your site|react-loading-skeleton/,

@@ -1,5 +1,6 @@
 export type Wave = "sine" | "triangle" | "sawtooth" | "square" | "noise";
-export type Clip = { name: string; notes: number[] };
+export type Note = { id: string; start: number; pitch: number; length: number };
+export type Clip = { notes: Note[] };
 export type Track = {
   id: string;
   name: string;
@@ -20,7 +21,7 @@ export type Track = {
   kind: "synth" | "kick" | "hat";
 };
 export type Project = {
-  version: 1;
+  version: 2;
   name: string;
   bpm: number;
   master: number;
@@ -35,14 +36,18 @@ export const colors = [
   "#7eafca",
   "#d2c276",
 ];
-const pattern = (steps: number[], notes: number[] = []) =>
-  Array.from({ length: 16 }, (_, i) =>
-    steps.includes(i) ? (notes[steps.indexOf(i)] ?? 0) : -1,
-  );
-export function makeTrack(i: number): Track {
+export const columnLabel = (i: number) => String.fromCharCode(65 + i);
+const pattern = (steps: number[], pitches: number[] = []) =>
+  steps.map((start, i) => ({
+    id: `n-${i}`,
+    start,
+    pitch: pitches[i] ?? 0,
+    length: 1,
+  }));
+export function makeTrack(i: number, rows = 4): Track {
   return {
     id: crypto.randomUUID(),
-    name: `Synth ${i + 1}`,
+    name: columnLabel(i),
     color: colors[i % 6],
     wave: "sine",
     frequency: 220,
@@ -55,49 +60,44 @@ export function makeTrack(i: number): Track {
     echo: 0,
     mute: false,
     solo: false,
-    active: -1,
+    active: 0,
     kind: "synth",
-    clips: [
-      { name: "Pattern 1", notes: pattern([0, 4, 8, 12]) },
-      null,
-      null,
-      null,
-    ],
+    clips: Array.from({ length: rows }, (_, j) =>
+      j === 0 ? { notes: [] } : null,
+    ),
   };
 }
-export function initialProject(): Project {
-  const specs: [
-    string,
-    Wave,
-    number,
-    "synth" | "kick" | "hat",
-    number[],
-    number[],
-  ][] = [
-    ["Kick", "sine", 55, "kick", [0, 4, 8, 12], []],
-    ["Hi-hat", "noise", 440, "hat", [2, 6, 10, 14], []],
-    [
-      "Bass",
-      "sawtooth",
-      65.41,
-      "synth",
-      [0, 3, 6, 8, 11, 14],
-      [0, 0, 7, 0, 3, 7],
-    ],
-    ["Keys", "triangle", 261.63, "synth", [0, 6, 10], [0, 7, 3]],
-    ["Pad", "sine", 130.81, "synth", [0, 8], [0, 7]],
-    ["Lead", "square", 523.25, "synth", [0, 3, 7, 10, 14], [0, 7, 12, 10, 7]],
-  ];
+export function emptyProject(): Project {
   return {
-    version: 1,
-    name: "Untitled session",
+    version: 2,
+    name: "Session",
     bpm: 120,
     master: 0.8,
     compressor: -18,
-    tracks: specs.map(([name, wave, frequency, kind, steps, notes], i) => ({
+    tracks: [makeTrack(0)],
+  };
+}
+export function addRow(p: Project): Project {
+  if (p.tracks[0].clips.length >= 64) return p;
+  return {
+    ...p,
+    tracks: p.tracks.map((t) => ({ ...t, clips: [...t.clips, null] })),
+  };
+}
+export function initialProject(): Project {
+  const specs: [Wave, number, Track["kind"], number[], number[]][] = [
+    ["sine", 55, "kick", [0, 4, 8, 12], []],
+    ["noise", 440, "hat", [2, 6, 10, 14], []],
+    ["sawtooth", 65.41, "synth", [0, 3, 6, 8, 11, 14], [0, 0, 7, 0, 3, 7]],
+    ["triangle", 261.63, "synth", [0, 6, 10], [0, 7, 3]],
+    ["sine", 130.81, "synth", [0, 8], [0, 7]],
+    ["square", 523.25, "synth", [0, 3, 7, 10, 14], [0, 7, 12, 10, 7]],
+  ];
+  return {
+    ...emptyProject(),
+    tracks: specs.map(([wave, frequency, kind, steps, pitches], i) => ({
       ...makeTrack(i),
       id: `track-${i}`,
-      name,
       wave,
       frequency,
       kind,
@@ -109,38 +109,16 @@ export function initialProject(): Project {
       reverb: i === 3 ? 0.35 : i === 4 ? 0.5 : 0.05,
       echo: i === 3 ? 0.2 : 0,
       clips: [
-        {
-          name: [
-            "Four on the floor",
-            "Offbeat",
-            "Low tide",
-            "Soft keys",
-            "Slow drift",
-            "Spark",
-          ][i],
-          notes: pattern(steps, notes),
-        },
+        { notes: pattern(steps, pitches) },
         i < 5
           ? {
-              name: [
-                "Broken beat",
-                "Shuffled",
-                "Undertow",
-                "Night keys",
-                "Wide open",
-              ][i],
               notes: pattern(
                 steps.map((x) => (x + 2) % 16),
-                notes,
+                pitches,
               ),
             }
           : null,
-        i === 0 || i === 2
-          ? {
-              name: i === 0 ? "Half time" : "Sub motion",
-              notes: pattern([0, 8], [0, 7]),
-            }
-          : null,
+        i === 0 || i === 2 ? { notes: pattern([0, 8], [0, 7]) } : null,
         null,
       ],
     })),
@@ -148,10 +126,13 @@ export function initialProject(): Project {
 }
 const bounded = (v: unknown, min: number, max: number): v is number =>
   typeof v === "number" && Number.isFinite(v) && v >= min && v <= max;
+const integer = (v: unknown, min: number, max: number) =>
+  Number.isInteger(v) && bounded(v, min, max);
 export function parseProject(raw: string): Project {
   const p = JSON.parse(raw);
   if (
-    p.version !== 1 ||
+    !p ||
+    ![1, 2].includes(p.version) ||
     typeof p.name !== "string" ||
     p.name.length > 80 ||
     !bounded(p.bpm, 40, 240) ||
@@ -163,8 +144,11 @@ export function parseProject(raw: string): Project {
   )
     throw Error("Invalid session file.");
   const ids = new Set();
+  const rows = p.tracks[0]?.clips?.length;
+  if (!integer(rows, 1, 64)) throw Error("Invalid row count.");
   for (const t of p.tracks) {
     if (
+      !t ||
       typeof t.id !== "string" ||
       ids.has(t.id) ||
       typeof t.name !== "string" ||
@@ -174,10 +158,9 @@ export function parseProject(raw: string): Project {
       !["synth", "kick", "hat"].includes(t.kind) ||
       typeof t.mute !== "boolean" ||
       typeof t.solo !== "boolean" ||
-      !Number.isInteger(t.active) ||
-      !bounded(t.active, -1, 3) ||
+      !integer(t.active, -1, rows - 1) ||
       !Array.isArray(t.clips) ||
-      t.clips.length !== 4
+      t.clips.length !== rows
     )
       throw Error("Invalid track settings.");
     ids.add(t.id);
@@ -192,20 +175,44 @@ export function parseProject(raw: string): Project {
       ["echo", 0, 0.8],
     ] as const)
       if (!bounded(t[key], min, max)) throw Error("Invalid sound settings.");
-    for (const c of t.clips)
-      if (
-        c !== null &&
-        (typeof c.name !== "string" ||
-          c.name.length > 60 ||
-          !Array.isArray(c.notes) ||
-          c.notes.length !== 16 ||
-          c.notes.some(
-            (n: unknown) => !Number.isInteger(n) || !bounded(n, -1, 24),
-          ))
-      )
-        throw Error("Invalid note pattern.");
+    t.clips = t.clips.map((c: Clip | null) => {
+      if (c === null) return null;
+      if (!c || !Array.isArray(c.notes)) throw Error("Invalid note pattern.");
+      if (p.version === 1) {
+        const notes = c.notes as unknown as number[];
+        if (notes.length !== 16 || notes.some((n) => !integer(n, -1, 24)))
+          throw Error("Invalid note pattern.");
+        return {
+          notes: notes.flatMap((pitch, start) =>
+            pitch < 0 ? [] : [{ id: `n-${start}`, start, pitch, length: 1 }],
+          ),
+        };
+      }
+      const noteIds = new Set();
+      if (c.notes.length > 400) throw Error("Too many notes.");
+      for (const n of c.notes) {
+        if (
+          !n ||
+          typeof n.id !== "string" ||
+          noteIds.has(n.id) ||
+          !integer(n.start, 0, 15) ||
+          !integer(n.pitch, 0, 24) ||
+          !integer(n.length, 1, 16 - n.start)
+        )
+          throw Error("Invalid note pattern.");
+        noteIds.add(n.id);
+      }
+      return {
+        notes: c.notes.map((n) => ({
+          id: n.id,
+          start: n.start,
+          pitch: n.pitch,
+          length: n.length,
+        })),
+      };
+    });
     if (t.active >= 0 && !t.clips[t.active])
       throw Error("Active clip is missing.");
   }
-  return p;
+  return { ...p, version: 2 };
 }
