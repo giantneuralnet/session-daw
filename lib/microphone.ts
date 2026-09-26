@@ -15,16 +15,24 @@ export class MicrophoneRecording {
   private finished = false;
   private endSession?: () => void;
   private closing?: Promise<void>;
+  private ownsContext: boolean;
   onProgress: (seconds: number, peak: number) => void = () => {};
   onComplete: (samples: Float32Array) => void = () => {};
   onError: (message: string) => void = () => {};
+
+  constructor(context?: AudioContext) {
+    this.context = context;
+    this.ownsContext = !context;
+  }
 
   async start() {
     if (!navigator.mediaDevices?.getUserMedia)
       throw Error("Microphone recording is unavailable in this browser.");
     this.endSession = beginMicrophoneSession();
     try {
-      const ctx = (this.context = new AudioContext());
+      // The app shares its music clock/output device with capture. Opening and
+      // closing extra live contexts can leave mobile playback on a quiet route.
+      const ctx = (this.context ??= new AudioContext());
       await ctx.resume();
       if (this.cancelled) return;
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -84,7 +92,12 @@ export class MicrophoneRecording {
     this.stream?.getTracks().forEach((t) => t.stop());
     this.source?.disconnect();
     this.worklet?.disconnect();
-    if (!this.closing && this.context && this.context.state !== "closed")
+    if (
+      this.ownsContext &&
+      !this.closing &&
+      this.context &&
+      this.context.state !== "closed"
+    )
       this.closing = this.context.close().catch(() => {});
     await this.closing;
     this.endSession?.();

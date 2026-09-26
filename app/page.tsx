@@ -1200,7 +1200,7 @@ export default function Session() {
               onWorkStatus={(busy) => {
                 fftBusy.current = busy;
               }}
-              onCaptureStart={stop}
+              getAudioContext={() => getEngine().ctx}
               onApply={(reconstruction, samples) => {
                 getEngine().cacheReconstruction(reconstruction, samples);
                 updateTrack(

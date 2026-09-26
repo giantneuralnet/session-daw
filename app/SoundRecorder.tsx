@@ -21,7 +21,7 @@ export function SoundRecorder({
   initialCapture,
   onCaptureChange,
   onApply,
-  onCaptureStart,
+  getAudioContext,
   onCaptureStatus,
   onWorkStatus,
   playing,
@@ -32,7 +32,7 @@ export function SoundRecorder({
   initialCapture?: SoundCapture;
   onCaptureChange: (capture: SoundCapture) => void;
   onApply: (model: Reconstruction, samples: Float32Array) => void;
-  onCaptureStart: () => void;
+  getAudioContext: () => AudioContext;
   onCaptureStatus: (capturing: boolean) => void;
   onWorkStatus: (busy: boolean) => void;
   playing: boolean;
@@ -63,7 +63,6 @@ export function SoundRecorder({
   >(null);
   const microphone = useRef<MicrophoneRecording | null>(null);
   const job = useRef<AbortController | null>(null);
-  const context = useRef<AudioContext | null>(null);
   const source = useRef<AudioBufferSourceNode | null>(null);
   const alive = useRef(true);
   const previewVersion = useRef(0);
@@ -89,7 +88,6 @@ export function SoundRecorder({
       microphone.current?.dispose();
       job.current?.abort();
       source.current?.stop();
-      void context.current?.close();
     };
   }, []);
   useEffect(() => {
@@ -109,9 +107,9 @@ export function SoundRecorder({
   }
   async function audioContext() {
     prepareAudioPlayback();
-    if (!context.current) context.current = new AudioContext();
-    await context.current.resume();
-    return context.current;
+    const context = getAudioContext();
+    await context.resume();
+    return context;
   }
   async function preview(
     samples: Float32Array,
@@ -157,13 +155,13 @@ export function SoundRecorder({
     onCaptureChange(next);
   }
   async function startRecording() {
-    stopPreview();
     setError("");
     setElapsed(0);
     setPeak(0);
     setStatus("permission");
-    onCaptureStart();
-    const mic = (microphone.current = new MicrophoneRecording());
+    const mic = (microphone.current = new MicrophoneRecording(
+      getAudioContext(),
+    ));
     mic.onProgress = (time, level) => {
       if (alive.current) {
         setElapsed(time);

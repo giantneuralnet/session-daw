@@ -49,7 +49,7 @@ function environment(
     audioSession: session,
     mediaDevices: {
       async getUserMedia() {
-        assert.equal(type, "play-and-record");
+        assert.equal(type, "auto");
         if (permissionError) throw permissionError;
         return { getTracks: () => [track], getAudioTracks: () => [track] };
       },
@@ -132,8 +132,8 @@ test("FFT capture stops the microphone and closes its context before restoring p
   env.send({ samples: new Float32Array(2400) });
   mic.stop();
   await Promise.resolve();
-  assert.equal(env.session.type, "play-and-record");
-  assert.deepEqual(env.events, ["play-and-record", "track stopped", "closing"]);
+  assert.equal(env.session.type, "auto");
+  assert.deepEqual(env.events, ["track stopped", "closing"]);
   env.finishClose();
   assert.equal((await completed).length, 2400);
   assert.deepEqual(env.events.slice(-2), ["closed", "playback"]);
@@ -179,7 +179,7 @@ test("late microphone permission cannot leave the device in capture mode after d
   await Promise.resolve();
   mic.dispose();
   await new Promise((resolve) => setImmediate(resolve));
-  env.session.type = "play-and-record"; // A late device acquisition changes the route again.
+  env.session.type = "auto"; // A late device acquisition changes the route again.
   let stopped = false;
   grant({
     getTracks: () => [
@@ -201,7 +201,7 @@ test("playback requests and old cleanup cannot interrupt a newer microphone capt
   const endSecond = beginMicrophoneSession();
   endFirst();
   prepareAudioPlayback();
-  assert.equal(session.type, "play-and-record");
+  assert.equal(session.type, "auto");
   endSecond();
   endFirst();
   assert.equal(session.type, "playback");
@@ -223,4 +223,30 @@ test("optional audio-session support never blocks recording or playback", (t) =>
       beginMicrophoneSession()();
     });
   }
+});
+
+test("delayed device release reselects playback, and a new take cancels that recovery", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { session, events } = environment(t);
+  session.type = "playback";
+  const endFirst = beginMicrophoneSession();
+  assert.equal(session.type, "auto");
+  endFirst();
+  events.length = 0;
+  t.mock.timers.tick(250);
+  assert.deepEqual(events, ["auto", "playback"]);
+  const endSecond = beginMicrophoneSession();
+  endSecond();
+  const endThird = beginMicrophoneSession();
+  events.length = 0;
+  t.mock.timers.tick(500);
+  assert.deepEqual(
+    events,
+    [],
+    "old recovery must not interfere with a new capture",
+  );
+  assert.equal(session.type, "auto");
+  endThird();
+  t.mock.timers.tick(250);
+  assert.equal(session.type, "playback");
 });

@@ -387,3 +387,108 @@ test("finishing a take completes the current bar and waits for every channel tai
   assert.deepEqual(messages, ["stop"]);
   assert.equal(e.tailTimer, null);
 });
+
+test("FFT microphone capture leaves playing clips, their clock, gains and session recording untouched", async (t) => {
+  const { MicrophoneRecording } = await import("../lib/microphone.ts");
+  const originalNavigator = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "navigator",
+  );
+  const originalWorklet = globalThis.AudioWorkletNode;
+  const p = initialProject();
+  p.tracks[0].active = 0;
+  const e = new AudioEngine(p);
+  let closed = 0,
+    suspended = 0,
+    stoppedVoices = 0,
+    stoppedMic = 0,
+    captureNode;
+  e.ctx.close = async () => {
+    closed++;
+  };
+  e.ctx.suspend = async () => {
+    suspended++;
+  };
+  e.ctx.audioWorklet = { async addModule() {} };
+  e.ctx.createMediaStreamSource = () => new Node();
+  e.voices.add(() => stoppedVoices++);
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      audioSession: { type: "playback" },
+      mediaDevices: {
+        async getUserMedia(options) {
+          assert.equal(options.audio.autoGainControl, false);
+          assert.equal(options.audio.echoCancellation, false);
+          assert.equal(options.audio.noiseSuppression, false);
+          const track = {
+            stop() {
+              stoppedMic++;
+            },
+            addEventListener() {},
+          };
+          return { getTracks: () => [track], getAudioTracks: () => [track] };
+        },
+      },
+    },
+  });
+  globalThis.AudioWorkletNode = class extends Node {
+    constructor(context) {
+      super();
+      assert.equal(context, e.ctx);
+      captureNode = this;
+    }
+    port = { postMessage() {} };
+  };
+  t.after(() => {
+    e.dispose();
+    globalThis.AudioWorkletNode = originalWorklet;
+    if (originalNavigator)
+      Object.defineProperty(globalThis, "navigator", originalNavigator);
+    else delete globalThis.navigator;
+  });
+  const gains = () => [
+    e.master.gain.value,
+    ...[...e.channels.values()].flatMap((c) => [
+      c.gain.gain.value,
+      c.wet.gain.value,
+      c.echo.gain.value,
+    ]),
+  ];
+  const before = gains();
+  await e.start();
+  const clock = e.timer;
+  const step = e.step;
+  e.recording = true;
+  const mic = new MicrophoneRecording(e.ctx);
+  await mic.start();
+  assert.equal(navigator.audioSession.type, "auto");
+  assert.equal(e.playing, true);
+  assert.equal(e.project.tracks[0].active, 0);
+  assert.equal(e.timer, clock);
+  e.ctx.currentTime += 0.3;
+  e.tick();
+  assert.ok(e.step > step, "the sequencer advances during microphone capture");
+  const finished = new Promise((resolve) => {
+    mic.onError = resolve;
+  });
+  captureNode.port.onmessage({ data: { done: true } }); // Short capture exercises release without resampling.
+  await finished;
+  assert.equal(navigator.audioSession.type, "playback");
+  assert.equal(e.playing, true);
+  assert.equal(e.recording, true);
+  assert.equal(e.timer, clock);
+  assert.equal(e.project.tracks[0].active, 0);
+  assert.deepEqual(gains(), before);
+  assert.equal(closed, 0);
+  assert.equal(suspended, 0);
+  assert.equal(stoppedVoices, 0);
+  assert.equal(stoppedMic, 1);
+  mic.dispose();
+  await Promise.resolve();
+  assert.equal(
+    closed,
+    0,
+    "leaving the FFT editor does not close the music context",
+  );
+});
