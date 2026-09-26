@@ -12,6 +12,8 @@ test("production server renders the session controls without starter content", a
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /<title>Session<\/title>/);
+  assert.match(html, /manifest.webmanifest/);
+  assert.match(html, /data-session-shell="1"/);
   const viewport = html.match(/<meta[^>]+name="viewport"[^>]*>/g) ?? [];
   assert.equal(viewport.length, 1);
   assert.match(viewport[0], /maximum-scale=1/);

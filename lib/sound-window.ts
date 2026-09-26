@@ -5,6 +5,8 @@ export type SoundCapture = {
   window: SoundWindow;
   appliedModel?: Reconstruction;
   appliedWindow?: SoundWindow;
+  count?: number;
+  wave?: "sine" | "triangle" | "square";
 };
 export const MIN_WINDOW = Math.round(SAMPLE_RATE * 0.08);
 export function moveWindow(

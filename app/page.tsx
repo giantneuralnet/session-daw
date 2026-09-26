@@ -31,6 +31,8 @@ import { PianoRoll } from "./PianoRoll";
 import { SoundRecorder } from "./SoundRecorder";
 import { ReconstructedWaveform } from "./ReconstructedWaveform";
 import type { SoundCapture } from "../lib/sound-window";
+import { LocalRecovery, packRecovery } from "../lib/recovery";
+import { startOfflineApp } from "../lib/offline";
 import { AudioEngine } from "../lib/audio";
 import {
   initialProject,
@@ -180,6 +182,19 @@ export default function Session() {
     [sharing, setSharing] = useState(false),
     [shareStatus, setShareStatus] = useState("");
   const [previewStopRevision, setPreviewStopRevision] = useState(0);
+  const [recoveryReady, setRecoveryReady] = useState(false);
+  const [captureRevision, setCaptureRevision] = useState(0);
+  const [saveStatus, setSaveStatus] = useState("Restoring…");
+  const [offlineReady, setOfflineReady] = useState(false);
+  const recovery = useRef<LocalRecovery | null>(null);
+  const recoveryLoaded = useRef(false);
+  const recoveryDirty = useRef(false);
+  const saving = useRef<Promise<boolean>>(Promise.resolve(true));
+  const fftBusy = useRef(false);
+  const busyState = useRef(false);
+  const viewState = useRef({ selected, clipIndex, tab });
+  viewState.current = { selected, clipIndex, tab };
+  busyState.current = playing || recording || finishing || encoding || !!take;
   const captures = useRef(new Map<string, SoundCapture>());
   const soundPreviewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const microphoneActive = useRef(false);
@@ -195,6 +210,99 @@ export default function Session() {
   const track =
       project.tracks.find((t) => t.id === selected) || project.tracks[0],
     clip = track.clips[clipIndex];
+  function flushRecovery() {
+    if (!recoveryLoaded.current || !recovery.current)
+      return Promise.resolve(false);
+    if (!recoveryDirty.current) return saving.current;
+    recoveryDirty.current = false;
+    setSaveStatus("Saving…");
+    const archive = packRecovery(
+      state.current,
+      viewState.current,
+      captures.current,
+    );
+    saving.current = recovery.current.save(archive).then((ok) => {
+      setSaveStatus(ok ? "Saved locally" : "Local save failed — export JSON");
+      if (!ok) recoveryDirty.current = true;
+      return ok;
+    });
+    return saving.current;
+  }
+  function retainCapture(id: string, capture: SoundCapture) {
+    const previous = captures.current.get(id);
+    captures.current.set(id, capture);
+    recoveryDirty.current = true;
+    setCaptureRevision((v) => v + 1);
+    // New microphone audio is checkpointed immediately, before reconstruction.
+    if (previous?.samples !== capture.samples) void flushRecovery();
+  }
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      recovery.current = new LocalRecovery(window.localStorage);
+    } catch {
+      setSaveStatus("Local storage unavailable — export JSON");
+      setRecoveryReady(true);
+      return;
+    }
+    void recovery.current.restore().then((saved) => {
+      if (cancelled) return;
+      if (saved) {
+        const { project: restored, selected, clipIndex, tab } = saved.recovery;
+        captures.current = saved.captures;
+        state.current = restored;
+        setProject(restored);
+        setSelected(selected);
+        setClipIndex(clipIndex);
+        setTab(tab);
+        setSaveStatus("Saved locally");
+      } else setSaveStatus("Local audio");
+      recoveryLoaded.current = true;
+      setRecoveryReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (!recoveryReady || !recoveryLoaded.current) return;
+    recoveryDirty.current = true;
+    const timer = setTimeout(() => void flushRecovery(), 1200);
+    return () => clearTimeout(timer);
+  }, [project, selected, clipIndex, tab, captureRevision, recoveryReady]);
+  useEffect(() => {
+    const flush = () => {
+      void flushRecovery();
+    };
+    const hidden = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    const timer = setInterval(flush, 5000);
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  }, []);
+  useEffect(
+    () =>
+      startOfflineApp({
+        busy: () =>
+          !recoveryLoaded.current ||
+          busyState.current ||
+          fftBusy.current ||
+          microphoneActive.current ||
+          !!recordBusy.current ||
+          !!engine.current?.playing ||
+          !!engine.current?.finishing ||
+          (!!engine.current?.previewBus && engine.current.voices.size > 0),
+        save: flushRecovery,
+        ready: setOfflineReady,
+      }),
+    [],
+  );
   function closeTempo() {
     setShowTempo(false);
     tempoButton.current?.focus();
@@ -262,6 +370,7 @@ export default function Session() {
     if (remember && history.current.commit(state.current, next))
       setHistoryRevision((v) => v + 1);
     state.current = next;
+    recoveryDirty.current = true;
     setProject(next);
   }
   function updateTrack(id: string, patch: Partial<Track>, audition = true) {
@@ -326,6 +435,7 @@ export default function Session() {
     engine.current?.pending.clear();
     setQueued({});
     state.current = next;
+    recoveryDirty.current = true;
     setProject(next);
     engine.current?.update(next);
     const destination =
@@ -613,6 +723,7 @@ export default function Session() {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
   function save() {
+    void flushRecovery();
     download(
       new Blob([JSON.stringify(state.current, null, 2)], {
         type: "application/json",
@@ -628,6 +739,7 @@ export default function Session() {
         throw Error("Session file is too large (64 MB maximum).");
       const p = parseProject(await f.text());
       stop();
+      captures.current = new Map();
       edit(() => ({
         ...p,
         tracks: p.tracks.map((t) => ({ ...t, active: -1 })),
@@ -665,6 +777,8 @@ export default function Session() {
   ).length;
   return (
     <main
+      inert={!recoveryReady}
+      aria-busy={!recoveryReady}
       onPointerDownCapture={(e) => {
         const target = e.target as HTMLInputElement;
         if (target.tagName === "INPUT" && target.type === "range")
@@ -1013,6 +1127,15 @@ export default function Session() {
                   name: `${track.name.slice(0, 32)} copy`,
                   active: -1,
                 };
+                const sourceCapture = captures.current.get(track.id);
+                if (sourceCapture)
+                  captures.current.set(t.id, {
+                    ...sourceCapture,
+                    window: [...sourceCapture.window],
+                    appliedModel: sourceCapture.appliedModel
+                      ? t.reconstruction
+                      : undefined,
+                  });
                 edit((p) => ({ ...p, tracks: [...p.tracks, t] }));
                 setSelected(t.id);
               }}
@@ -1064,7 +1187,7 @@ export default function Session() {
               ))}
             </div>
             <SoundRecorder
-              key={track.id}
+              key={`${recoveryReady}:${track.id}`}
               reconstruction={track.reconstruction}
               active={track.kind === "recorded"}
               playing={playing}
@@ -1073,9 +1196,10 @@ export default function Session() {
               }}
               stopRevision={previewStopRevision}
               initialCapture={captures.current.get(track.id)}
-              onCaptureChange={(capture) =>
-                captures.current.set(track.id, capture)
-              }
+              onCaptureChange={(capture) => retainCapture(track.id, capture)}
+              onWorkStatus={(busy) => {
+                fftBusy.current = busy;
+              }}
               onCaptureStart={stop}
               onApply={(reconstruction, samples) => {
                 getEngine().cacheReconstruction(reconstruction, samples);
@@ -1322,7 +1446,17 @@ export default function Session() {
               ? clock(seconds)
               : "Space to play / stop"}
           <span className="footer-separator">·</span>
-          <span className="footer-local">Local audio</span>
+          <span
+            className="footer-local"
+            title={
+              offlineReady
+                ? "Ready offline · checks for updates when opened"
+                : "Your work is saved in this browser"
+            }
+          >
+            {saveStatus}
+            {offlineReady ? " · Offline ready" : ""}
+          </span>
         </span>
       </footer>
       {message && (

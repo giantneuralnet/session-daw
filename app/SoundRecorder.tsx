@@ -22,6 +22,7 @@ export function SoundRecorder({
   onApply,
   onCaptureStart,
   onCaptureStatus,
+  onWorkStatus,
   playing,
 }: {
   reconstruction?: Reconstruction;
@@ -32,14 +33,18 @@ export function SoundRecorder({
   onApply: (model: Reconstruction, samples: Float32Array) => void;
   onCaptureStart: () => void;
   onCaptureStatus: (capturing: boolean) => void;
+  onWorkStatus: (busy: boolean) => void;
   playing: boolean;
 }) {
   const [model, setModel] = useState(reconstruction);
   const [count, setCount] = useState(
-    Math.min(reconstruction?.count ?? 32, MAX_PARTIALS),
+    Math.min(
+      initialCapture?.count ?? reconstruction?.count ?? 32,
+      MAX_PARTIALS,
+    ),
   );
   const [wave, setWave] = useState<ConstructionWave>(
-    reconstruction?.wave ?? "sine",
+    initialCapture?.wave ?? reconstruction?.wave ?? "sine",
   );
   const playingNow = useRef(playing);
   playingNow.current = playing;
@@ -68,7 +73,10 @@ export function SoundRecorder({
     onCaptureStatus(status === "recording" || status === "permission");
     return () => onCaptureStatus(false);
   }, [status]);
+  const previousModel = useRef(reconstruction);
   useEffect(() => {
+    if (previousModel.current === reconstruction) return;
+    previousModel.current = reconstruction;
     setModel(reconstruction);
     setCount(Math.min(reconstruction?.count ?? 32, MAX_PARTIALS));
     setWave(reconstruction?.wave ?? "sine");
@@ -83,6 +91,15 @@ export function SoundRecorder({
       void context.current?.close();
     };
   }, []);
+  useEffect(() => {
+    onWorkStatus(status !== "idle" || audition !== null);
+    return () => onWorkStatus(false);
+  }, [status, audition]);
+  useEffect(() => {
+    if (capture && (capture.count !== count || capture.wave !== wave)) {
+      rememberCapture({ ...capture, count, wave });
+    }
+  }, [count, wave, capture]);
   function stopPreview() {
     previewVersion.current++;
     source.current?.stop();
