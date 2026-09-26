@@ -1,3 +1,4 @@
+import { TailMonitor } from "./tail-monitor.ts";
 import type { Project, Track } from "./session";
 type Channel = {
   input: GainNode;
@@ -26,6 +27,13 @@ export class AudioEngine {
   recorder?: AudioWorkletNode;
   worker?: Worker;
   recording = false;
+  finishing = false;
+  stopAtStep: number | null = null;
+  tailTimer: ReturnType<typeof setInterval> | null = null;
+  lastVoiceEnd = 0;
+  voices = new Set<() => void>();
+  onStopped: () => void = () => {};
+  onRecordingFinalizing: () => void = () => {};
   previewStop?: () => void;
   previewSerial = 0;
   onRecorded: (blob: Blob) => void = () => {};
@@ -40,7 +48,7 @@ export class AudioEngine {
     this.compressor.attack.value = 0.003;
     this.compressor.release.value = 0.25;
     this.analyser = this.ctx.createAnalyser();
-    this.analyser.fftSize = 256;
+    this.analyser.fftSize = 2048;
     this.compressor.connect(this.master);
     this.master.connect(this.analyser);
     this.analyser.connect(this.ctx.destination);
@@ -91,7 +99,7 @@ export class AudioEngine {
         feedback.connect(delay);
         gain.connect(pan);
         const analyser = this.ctx.createAnalyser();
-        analyser.fftSize = 256;
+        analyser.fftSize = 2048;
         pan.connect(analyser);
         analyser.connect(this.compressor);
         c = {
@@ -123,31 +131,73 @@ export class AudioEngine {
   }
   async start() {
     await this.ctx.resume();
-    if (this.playing) return;
+    if (this.playing || this.finishing) return;
     this.playing = true;
     this.step = 0;
     this.next = this.ctx.currentTime + 0.06;
     this.tick();
     this.timer = setInterval(() => this.tick(), 25);
   }
-  stop() {
+  stop(immediate = true) {
     this.playing = false;
+    this.stopAtStep = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.pending.clear();
-    this.master.gain.cancelScheduledValues(this.ctx.currentTime);
-    this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.015);
-    for (const c of this.channels.values())
-      c.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.01);
+    if (immediate) {
+      for (const stopVoice of this.voices) stopVoice();
+      this.previewStop?.();
+      this.lastVoiceEnd = this.ctx.currentTime + 0.03;
+    }
+    this.project = {
+      ...this.project,
+      tracks: this.project.tracks.map((t) => ({ ...t, active: -1 })),
+    };
+    this.onStopped();
+  }
+  finishRecording() {
+    if (!this.recording || this.finishing) return;
+    this.finishing = true;
+    this.pending.clear();
+    if (this.playing)
+      this.stopAtStep = Math.max(16, Math.ceil(this.step / 16) * 16);
+    const monitor = new TailMonitor();
+    const samples = new Float32Array(2048);
+    this.tailTimer = setInterval(() => {
+      let peak = 0;
+      for (const analyser of [
+        this.analyser,
+        ...Array.from(this.channels.values(), (c) => c.analyser),
+      ]) {
+        analyser.getFloatTimeDomainData(samples);
+        for (const v of samples) peak = Math.max(peak, Math.abs(v));
+      }
+      if (
+        monitor.update(
+          this.ctx.currentTime,
+          peak,
+          !this.playing && this.ctx.currentTime >= this.lastVoiceEnd,
+        )
+      ) {
+        if (this.tailTimer) clearInterval(this.tailTimer);
+        this.tailTimer = null;
+        this.endRecording();
+        this.onRecordingFinalizing();
+      }
+    }, 50);
   }
   queue(id: string, clip: number) {
-    this.pending.set(id, clip);
+    if (!this.finishing) this.pending.set(id, clip);
   }
   tick() {
     if (!this.playing) return;
     if (this.next < this.ctx.currentTime - 0.2)
       this.next = this.ctx.currentTime + 0.03;
     while (this.next < this.ctx.currentTime + 0.1) {
+      if (this.stopAtStep !== null && this.step >= this.stopAtStep) {
+        if (this.ctx.currentTime >= this.next) this.stop(false);
+        return;
+      }
       if (this.step % 16 === 0)
         for (const [id, clip] of this.pending) {
           const t = this.project.tracks.find((x) => x.id === id);
@@ -233,9 +283,18 @@ export class AudioEngine {
         source.stop(this.ctx.currentTime + 0.025);
       };
     }
+    const stopVoice = () => {
+      env.gain.cancelScheduledValues(this.ctx.currentTime);
+      env.gain.setTargetAtTime(0, this.ctx.currentTime, 0.005);
+      source.stop(this.ctx.currentTime + 0.025);
+    };
+    this.voices.add(stopVoice);
+    if (!preview)
+      this.lastVoiceEnd = Math.max(this.lastVoiceEnd, time + duration + 0.01);
     source.start(time);
     source.stop(time + duration + 0.01);
     source.onended = () => {
+      this.voices.delete(stopVoice);
       source.disconnect();
       filter.disconnect();
       env.disconnect();
@@ -248,6 +307,7 @@ export class AudioEngine {
     this.note(t, pitch, this.ctx.currentTime + 0.02, 0.1, true);
   }
   async record() {
+    if (this.recording || this.finishing) return;
     await this.ctx.resume();
     if (!this.recorder) {
       await this.ctx.audioWorklet.addModule("/audio/recorder.js");
@@ -274,10 +334,15 @@ export class AudioEngine {
   endRecording() {
     if (this.recording) {
       this.recording = false;
+      this.finishing = false;
+      if (this.tailTimer) clearInterval(this.tailTimer);
+      this.tailTimer = null;
       this.recorder?.port.postMessage("stop");
     }
   }
   dispose() {
+    if (this.tailTimer) clearInterval(this.tailTimer);
+    this.playing = false;
     if (this.timer) clearInterval(this.timer);
     this.worker?.terminate();
     void this.ctx.close();

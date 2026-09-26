@@ -62,7 +62,7 @@ export function makeTrack(i: number, rows = 4): Track {
     echo: 0,
     mute: false,
     solo: false,
-    active: 0,
+    active: -1,
     kind: "synth",
     clips: Array.from({ length: rows }, (_, j) =>
       j === 0 ? { notes: [] } : null,
@@ -86,6 +86,9 @@ export function addRow(p: Project): Project {
     tracks: p.tracks.map((t) => ({ ...t, clips: [...t.clips, null] })),
   };
 }
+export function ensureEmptyRow(p: Project): Project {
+  return p.tracks.some((t) => t.clips.every((c) => c !== null)) ? addRow(p) : p;
+}
 export function initialProject(): Project {
   const specs: [Wave, number, Track["kind"], number[], number[]][] = [
     ["sine", 55, "kick", [0, 4, 8, 12], []],
@@ -103,7 +106,7 @@ export function initialProject(): Project {
       wave,
       frequency,
       kind,
-      active: i < 4 ? 0 : -1,
+      active: -1,
       volume: [0.85, 0.35, 0.5, 0.4, 0.4, 0.22][i],
       cutoff: i === 2 ? 950 : 6000,
       attack: i === 4 ? 0.4 : 0.008,

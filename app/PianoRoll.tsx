@@ -55,6 +55,12 @@ export function PianoRoll({
       start: 0,
       pitch: Math.round(initialPitch.current),
     });
+  const twoFinger = useRef<{
+    x: number;
+    y: number;
+    top: number;
+    left: number;
+  } | null>(null);
   const shown = draft ? placeNote(notes, draft) : notes;
   useEffect(() => {
     if (viewport.current)
@@ -66,6 +72,48 @@ export function PianoRoll({
     gesture.current = null;
     setDraft(null);
   }, [revision]);
+  useEffect(() => {
+    const view = viewport.current!;
+    const horizontal = view.closest<HTMLElement>(".piano-scroll")!;
+    const begin = (e: TouchEvent) => {
+      if (e.touches.length < 2) return;
+      const g = gesture.current;
+      gesture.current = null;
+      setDraft(null);
+      if (g && grid.current?.hasPointerCapture(g.pointer))
+        grid.current.releasePointerCapture(g.pointer);
+      twoFinger.current = {
+        x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+        y: (e.touches[0].clientY + e.touches[1].clientY) / 2,
+        top: view.scrollTop,
+        left: horizontal.scrollLeft,
+      };
+      e.preventDefault();
+    };
+    const move = (e: TouchEvent) => {
+      const pan = twoFinger.current;
+      if (!pan) return;
+      e.preventDefault();
+      if (e.touches.length < 2) return;
+      view.scrollTop =
+        pan.top + pan.y - (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      horizontal.scrollLeft =
+        pan.left + pan.x - (e.touches[0].clientX + e.touches[1].clientX) / 2;
+    };
+    const end = (e: TouchEvent) => {
+      if (e.touches.length === 0) twoFinger.current = null;
+    };
+    view.addEventListener("touchstart", begin, { passive: false });
+    view.addEventListener("touchmove", move, { passive: false });
+    view.addEventListener("touchend", end);
+    view.addEventListener("touchcancel", end);
+    return () => {
+      view.removeEventListener("touchstart", begin);
+      view.removeEventListener("touchmove", move);
+      view.removeEventListener("touchend", end);
+      view.removeEventListener("touchcancel", end);
+    };
+  }, []);
   function cell(e: PointerEvent) {
     const r = grid.current!.getBoundingClientRect();
     return {
@@ -76,7 +124,7 @@ export function PianoRoll({
     };
   }
   function down(e: PointerEvent<HTMLDivElement>) {
-    if (e.button !== 0 || gesture.current) return;
+    if (e.button !== 0 || gesture.current || twoFinger.current) return;
     const at = cell(e),
       target = e.target as HTMLElement,
       id = target.closest<HTMLElement>("[data-note]")?.dataset.note,

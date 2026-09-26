@@ -18,7 +18,9 @@ test("production server renders the session controls without starter content", a
   assert.match(html, /Scroll to note editor/);
   assert.match(html, /aria-label="Undo"/);
   assert.match(html, /aria-label="Redo"/);
-  assert.match(html, /Add row/);
+  assert.doesNotMatch(html, /Add row|track-header|row-label-spacer/);
+  assert.match(html, /Closed hat/);
+  assert.match(html, /Warm pad/);
   assert.doesNotMatch(
     html,
     /Session name|Track name|master-strip|Four on the floor/,

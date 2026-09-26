@@ -45,6 +45,9 @@ class Node {
   knee = new Param();
   attack = new Param();
   release = new Param();
+  getFloatTimeDomainData(data) {
+    data.fill(this.level ?? 0);
+  }
   connect() {}
   disconnect() {}
   start() {}
@@ -217,4 +220,90 @@ test("long notes sustain longer while preview remains audible on a muted track",
   await e.preview(t, 12);
   assert.equal(seen[1], 12);
   assert.equal(seen[4], true);
+});
+
+test("recording arms without starting clips; Stop cuts voices but keeps recording and effects routing", async () => {
+  const NativeWorker = globalThis.Worker;
+  globalThis.Worker = class {
+    postMessage() {}
+    terminate() {}
+  };
+  try {
+    const p = initialProject(),
+      e = new AudioEngine(p),
+      messages = [];
+    e.recorder = { port: { postMessage: (m) => messages.push(m) } };
+    await e.record();
+    assert.equal(e.playing, false);
+    assert.equal(e.recording, true);
+    assert.ok(e.project.tracks.every((t) => t.active === -1));
+    let stopped = 0;
+    e.voices.add(() => stopped++);
+    e.playing = true;
+    e.stop();
+    assert.equal(stopped, 1);
+    assert.equal(e.recording, true);
+    assert.equal(e.master.gain.value, p.master);
+    assert.equal(
+      e.channels.get(p.tracks[0].id).gain.gain.value,
+      p.tracks[0].volume,
+    );
+    assert.deepEqual(messages, ["start"]);
+    e.endRecording();
+  } finally {
+    globalThis.Worker = NativeWorker;
+  }
+});
+test("finishing a take completes the current bar and waits for every channel tail", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const p = initialProject();
+  p.tracks[0].active = 0;
+  const e = new AudioEngine(p),
+    messages = [];
+  e.recorder = { port: { postMessage: (m) => messages.push(m) } };
+  e.recording = true;
+  e.playing = true;
+  e.step = 6;
+  e.next = 0.75;
+  e.ctx.currentTime = 0.75;
+  e.lastVoiceEnd = 2.4;
+  const steps = [];
+  e.note = () => {};
+  e.onStep = (s) => steps.push(s);
+  let finalized = 0;
+  e.onRecordingFinalizing = () => finalized++;
+  e.finishRecording();
+  assert.equal(e.stopAtStep, 16);
+  assert.equal(e.recording, true);
+  for (let i = 6; i <= 16; i++) {
+    e.ctx.currentTime = i * 0.125;
+    e.tick();
+  }
+  assert.equal(e.playing, false);
+  assert.deepEqual(steps, [6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+  assert.equal(e.recording, true);
+  const channel = e.channels.values().next().value;
+  channel.analyser.level = 0.02;
+  e.ctx.currentTime = 2.5;
+  t.mock.timers.tick(50);
+  assert.equal(finalized, 0);
+  channel.analyser.level = 0;
+  e.ctx.currentTime = 3;
+  t.mock.timers.tick(50);
+  e.ctx.currentTime = 4.9;
+  t.mock.timers.tick(50);
+  assert.equal(finalized, 0);
+  channel.analyser.level = 0.0002;
+  e.ctx.currentTime = 5;
+  t.mock.timers.tick(50);
+  channel.analyser.level = 0;
+  e.ctx.currentTime = 5.1;
+  t.mock.timers.tick(50);
+  e.ctx.currentTime = 7.2;
+  t.mock.timers.tick(50);
+  assert.equal(finalized, 1);
+  assert.equal(e.recording, false);
+  assert.equal(e.finishing, false);
+  assert.deepEqual(messages, ["stop"]);
+  assert.equal(e.tailTimer, null);
 });

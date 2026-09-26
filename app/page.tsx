@@ -22,6 +22,7 @@ import {
   Power,
   Music2,
 } from "lucide-react";
+import { soundPresets } from "../lib/presets";
 import { History } from "../lib/history";
 import { pasteNotes } from "../lib/piano-roll";
 import { PianoRoll } from "./PianoRoll";
@@ -29,7 +30,7 @@ import { AudioEngine } from "../lib/audio";
 import {
   initialProject,
   emptyProject,
-  addRow,
+  ensureEmptyRow,
   columnLabel,
   type Note,
   makeTrack,
@@ -157,6 +158,7 @@ export default function Session() {
     [queued, setQueued] = useState<Record<string, number>>({}),
     [recording, setRecording] = useState(false),
     [encoding, setEncoding] = useState(false),
+    [finishing, setFinishing] = useState(false),
     [take, setTake] = useState<Blob | null>(null),
     [seconds, setSeconds] = useState(0),
     [message, setMessage] = useState(""),
@@ -179,7 +181,7 @@ export default function Session() {
       project.tracks.find((t) => t.id === selected) || project.tracks[0],
     clip = track.clips[clipIndex];
   function edit(fn: (p: Project) => Project, remember = true) {
-    const next = fn(state.current);
+    const next = ensureEmptyRow(fn(state.current));
     if (remember && history.current.commit(state.current, next))
       setHistoryRevision((v) => v + 1);
     state.current = next;
@@ -252,7 +254,7 @@ export default function Session() {
     return () => clearInterval(id);
   }, [recording]);
   useEffect(() => {
-    if (!playing) {
+    if (!engine.current) {
       setLevels({});
       return;
     }
@@ -272,7 +274,7 @@ export default function Session() {
       setLevels(next);
     }, 70);
     return () => clearInterval(id);
-  }, [playing]);
+  }, [playing, recording]);
   function getEngine() {
     if (!engine.current) {
       const e = new AudioEngine(state.current);
@@ -292,6 +294,24 @@ export default function Session() {
           return n;
         });
       };
+      e.onStopped = () => {
+        setPlaying(false);
+        setStep(-1);
+        setQueued({});
+        edit(
+          (p) => ({
+            ...p,
+            tracks: p.tracks.map((t) => ({ ...t, active: -1 })),
+          }),
+          false,
+        );
+      };
+      e.onRecordingFinalizing = () => {
+        setSeconds((Date.now() - recordStart.current) / 1000);
+        setRecording(false);
+        setFinishing(false);
+        setEncoding(true);
+      };
       e.onRecorded = (blob) => {
         setTake(blob);
         setEncoding(false);
@@ -301,6 +321,7 @@ export default function Session() {
         setMessage(m);
         setEncoding(false);
         setRecording(false);
+        setFinishing(false);
         e.endRecording();
       };
       engine.current = e;
@@ -308,6 +329,7 @@ export default function Session() {
     return engine.current;
   }
   async function play() {
+    if (finishing) return;
     try {
       const e = getEngine();
       e.update(state.current);
@@ -322,7 +344,6 @@ export default function Session() {
     setPlaying(false);
     setStep(-1);
     setQueued({});
-    if (recording) finishRecording();
   }
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -382,6 +403,7 @@ export default function Session() {
     }
   }
   function launch(t: Track, index: number) {
+    if (finishing) return;
     if (playing) {
       getEngine().queue(t.id, index);
       setQueued((q) => ({ ...q, [t.id]: index }));
@@ -417,7 +439,7 @@ export default function Session() {
     setMessage("");
   }
   async function record() {
-    if (recordBusy.current) return;
+    if (recordBusy.current || finishing || encoding) return;
     if (recording) {
       finishRecording();
       return;
@@ -430,8 +452,7 @@ export default function Session() {
       setSeconds(0);
       recordStart.current = Date.now();
       setRecording(true);
-      setShowRecord(true);
-      if (!playing) await play();
+      setShowRecord(false);
     } catch {
       setMessage("Recording is unavailable. Try a current browser over HTTPS.");
     } finally {
@@ -439,9 +460,15 @@ export default function Session() {
     }
   }
   function finishRecording() {
-    engine.current?.endRecording();
-    setRecording(false);
-    setEncoding(true);
+    if (finishing) {
+      setShowRecord(true);
+      return;
+    }
+    if (!recording) return;
+    setFinishing(true);
+    setShowRecord(true);
+    setQueued({});
+    engine.current?.finishRecording();
   }
   function download(blob: Blob, name: string) {
     const url = URL.createObjectURL(blob);
@@ -466,7 +493,10 @@ export default function Session() {
       if (f.size > 1024 * 1024) throw Error("Session file is too large.");
       const p = parseProject(await f.text());
       stop();
-      edit(() => p);
+      edit(() => ({
+        ...p,
+        tracks: p.tracks.map((t) => ({ ...t, active: -1 })),
+      }));
       setSelected(p.tracks[0].id);
       setClipIndex(0);
       setMessage("Session loaded");
@@ -521,10 +551,10 @@ export default function Session() {
               <Square size={14} fill="currentColor" />
             </button>
             <button
-              aria-label={recording ? "Stop recording" : "Record session"}
+              aria-label={recording ? "Finish recording" : "Record session"}
               title="Record session"
               className={recording ? "record is-recording" : "record"}
-              disabled={encoding}
+              disabled={encoding || finishing}
               onClick={() => void record()}
             >
               <Circle size={14} fill="currentColor" />
@@ -603,7 +633,11 @@ export default function Session() {
           <button
             className="export"
             onClick={() =>
-              take ? download(take, `${project.name}.mp3`) : setShowRecord(true)
+              recording
+                ? finishRecording()
+                : take
+                  ? download(take, `${project.name}.mp3`)
+                  : setShowRecord(true)
             }
           >
             <AudioLines size={16} />
@@ -625,7 +659,6 @@ export default function Session() {
             style={{ "--count": project.tracks.length } as CSSProperties}
           >
             <div className="row-labels">
-              <div className="row-label-spacer" />
               {project.tracks[0].clips.map((_, j) => (
                 <button
                   key={j}
@@ -646,15 +679,6 @@ export default function Session() {
                 className={`track ${t.id === track.id ? "selected" : ""}`}
                 style={{ "--track": t.color } as CSSProperties}
               >
-                <button
-                  className="track-header"
-                  onClick={() => {
-                    setSelected(t.id);
-                    setTab("sound");
-                  }}
-                >
-                  <span>{columnLabel(i)}</span>
-                </button>
                 <div className="clip-slots">
                   {t.clips.map((c, j) => (
                     <div
@@ -816,15 +840,6 @@ export default function Session() {
           </div>
         </div>
       </section>
-      <div className="row-actions">
-        <button
-          onClick={() => edit(addRow)}
-          disabled={project.tracks[0].clips.length >= 64}
-        >
-          <Plus size={13} />
-          Add row
-        </button>
-      </div>
       <section
         ref={editor}
         id="note-editor"
@@ -891,6 +906,32 @@ export default function Session() {
         </div>
         {tab === "sound" ? (
           <div className="sound-editor">
+            <div className="preset-panel">
+              {(["Drums", "Synths"] as const).map((group) => (
+                <div className="preset-group" key={group}>
+                  <span>{group}</span>
+                  <div>
+                    {soundPresets
+                      .filter((p) => p.group === group)
+                      .map((p) => (
+                        <button
+                          key={p.name}
+                          className={
+                            Object.entries(p.sound).every(
+                              ([k, v]) => track[k as keyof Track] === v,
+                            )
+                              ? "preset-selected"
+                              : ""
+                          }
+                          onClick={() => updateTrack(track.id, p.sound)}
+                        >
+                          {p.name}
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              ))}
+            </div>
             <div className="oscillator">
               <div className="section-label">
                 OSCILLATOR{" "}
@@ -1066,7 +1107,13 @@ export default function Session() {
       <footer>
         <span>
           <i className={playing ? "status-dot green" : "status-dot"} />
-          {recording ? "Recording" : playing ? "Playing" : "Stopped"}
+          {finishing
+            ? "Finishing recording"
+            : recording
+              ? "Recording"
+              : playing
+                ? "Playing"
+                : "Stopped"}
           <span className="footer-separator">/</span>
           {project.tracks.length} tracks
           <span className="footer-separator">/</span>
@@ -1111,22 +1158,31 @@ export default function Session() {
               {clock(seconds)}
             </div>
             <p>
-              {recording
-                ? "Capturing the master output."
-                : encoding
-                  ? "Encoding MP3…"
-                  : take
-                    ? "Your recording is ready."
-                    : "Record your live clip performance and mix."}
+              {finishing
+                ? playing
+                  ? "Waiting for patterns to finish…"
+                  : "Waiting for reverb and echoes to become quiet…"
+                : recording
+                  ? "Capturing the master output."
+                  : encoding
+                    ? "Encoding MP3…"
+                    : take
+                      ? "Your recording is ready."
+                      : "Record your live clip performance and mix."}
             </p>
             <div className="dialog-buttons">
-              <button disabled={encoding} onClick={() => void record()}>
+              <button
+                disabled={encoding || finishing}
+                onClick={() => void record()}
+              >
                 {recording ? <Square size={13} /> : <Circle size={13} />}{" "}
-                {recording
-                  ? "Stop recording"
-                  : take
-                    ? "New recording"
-                    : "Start recording"}
+                {finishing
+                  ? "Finishing…"
+                  : recording
+                    ? "Finish recording"
+                    : take
+                      ? "New recording"
+                      : "Start recording"}
               </button>
               <button
                 className="primary"
