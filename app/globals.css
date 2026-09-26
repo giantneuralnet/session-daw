@@ -2364,3 +2364,76 @@ footer {
   padding: 12px 16px 52px;
   flex-shrink: 0;
 }
+
+/* One compact transport row; tempo and position stay out of the toolbar. */
+.transport {
+  height: 52px;
+  min-height: 52px;
+  flex-wrap: nowrap;
+  padding: 6px 12px;
+  gap: 10px;
+  overflow-x: auto;
+}
+.transport-left {
+  width: auto;
+  flex: none;
+  justify-content: flex-start;
+  gap: 8px;
+}
+.play-controls {
+  padding: 0;
+  gap: 3px;
+}
+.tempo {
+  padding: 0 8px;
+  height: 34px;
+}
+.tempo span {
+  color: #b9b6c3;
+  font-size: 11px;
+  letter-spacing: 0;
+}
+.file-controls {
+  flex-wrap: nowrap;
+  margin: 0 0 0 auto;
+  gap: 4px;
+  flex: none;
+}
+.history-controls {
+  padding: 0;
+  margin: 0 4px 0 0;
+}
+.note-resize {
+  cursor: grab;
+  -webkit-touch-callout: none;
+}
+.piano-note {
+  -webkit-touch-callout: none;
+}
+@media (max-width: 650px) {
+  .transport {
+    padding: 6px;
+    gap: 4px;
+  }
+  .transport-left {
+    gap: 2px;
+  }
+  .file-controls {
+    gap: 2px;
+  }
+  .file-controls > button {
+    width: 30px;
+    height: 34px;
+    padding: 0;
+  }
+  .file-controls > button > span {
+    display: none;
+  }
+  .file-controls .history-controls button {
+    width: 26px;
+    height: 34px;
+  }
+  .history-controls {
+    margin: 0;
+  }
+}

@@ -1,6 +1,14 @@
 import { MIN_PITCH, MAX_PITCH, type Note } from "./session.ts";
 export const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
+export const NOTE_HOLD_MS = 1000 / 3;
+export function noteDragMode(elapsed: number, side: "left" | "right") {
+  return elapsed < NOTE_HOLD_MS
+    ? "move"
+    : side === "left"
+      ? "resize-start"
+      : "resize";
+}
 export function drawNote(
   id: string,
   anchor: number,
@@ -78,11 +86,13 @@ export function finishGesture(
   original: Note,
   draft: Note,
   moved: boolean,
+  held = false,
 ): { notes: Note[]; preview: number | null } {
   if (mode === "empty")
     return moved
       ? { notes, preview: null }
       : { notes: placeNote(notes, original), preview: original.pitch };
+  if (!moved && held) return { notes, preview: null };
   if (!moved)
     return { notes: notes.filter((n) => n.id !== original.id), preview: null };
   return { notes: placeNote(notes, draft), preview: null };

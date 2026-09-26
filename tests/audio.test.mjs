@@ -534,3 +534,57 @@ test("non-4/4 clip launches, note gates and recording completion follow the new 
     e.dispose();
   }
 });
+
+test("Stop waits for the shared bar boundary without cutting voices, tails or session recording", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  for (const [signature, steps] of [
+    [[4, 4], 16],
+    [[3, 4], 12],
+    [[7, 8], 14],
+  ]) {
+    const p = initialProject();
+    p.timeSignature = signature;
+    p.tracks[0].active = 0;
+    const e = new AudioEngine(p);
+    let cut = 0,
+      ended = 0;
+    e.voices.add(() => cut++);
+    e.onStopped = () => ended++;
+    const heard = [];
+    e.note = (track, pitch, time) => heard.push(time);
+    e.playing = true;
+    e.recording = true;
+    e.step = 5;
+    e.next = 5 * 0.125;
+    e.lastVoiceEnd = 5;
+    e.queue(p.tracks[0].id, 1);
+    e.stopAtBarEnd();
+    assert.equal(e.stopAtStep, steps);
+    assert.equal(e.playing, true);
+    assert.equal(e.pending.size, 0);
+    assert.equal(e.project.tracks[0].active, 0);
+    e.stopAtBarEnd();
+    assert.equal(
+      e.stopAtStep,
+      steps,
+      "repeated stop presses never postpone the boundary",
+    );
+    for (let i = 5; i < steps; i++) {
+      e.ctx.currentTime = i * 0.125;
+      e.tick();
+      assert.equal(e.playing, true);
+    }
+    assert.ok(heard.length > 0, "remaining notes play before stopping");
+    const before = heard.length;
+    e.ctx.currentTime = steps * 0.125;
+    e.tick();
+    assert.equal(e.playing, false);
+    assert.equal(heard.length, before, "no notes start in the next bar");
+    assert.equal(e.project.tracks[0].active, -1);
+    assert.equal(cut, 0);
+    assert.equal(e.lastVoiceEnd, 5);
+    assert.equal(e.recording, true);
+    assert.equal(ended, 1);
+    e.dispose();
+  }
+});

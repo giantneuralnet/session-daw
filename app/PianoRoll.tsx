@@ -17,6 +17,8 @@ import {
   centeredPitch,
   placeNote,
   finishGesture,
+  noteDragMode,
+  NOTE_HOLD_MS,
 } from "../lib/piano-roll";
 const ROW_HEIGHT = 18,
   ROWS = MAX_PITCH - MIN_PITCH + 1;
@@ -27,6 +29,8 @@ type Gesture = {
   pitch: number;
   x: number;
   y: number;
+  startedAt: number;
+  side: "left" | "right";
   scrollTop: number;
   mode: "empty" | "move" | "resize" | "resize-start";
   moved: boolean;
@@ -154,13 +158,10 @@ export function PianoRoll({
     const note =
       existing ??
       drawNote(crypto.randomUUID(), at.start, at.start, at.pitch, steps);
-    const mode = existing
-      ? target.closest<HTMLElement>("[data-resize]")?.dataset.resize === "left"
-        ? "resize-start"
-        : target.closest("[data-resize]")
-          ? "resize"
-          : "move"
-      : "empty";
+    const mode = existing ? "move" : "empty";
+    const bounds = target
+      .closest<HTMLElement>("[data-note]")
+      ?.getBoundingClientRect();
     if (existing) e.preventDefault();
     gesture.current = {
       pointer: e.pointerId,
@@ -169,6 +170,9 @@ export function PianoRoll({
       pitch: at.pitch,
       x: e.clientX,
       y: e.clientY,
+      startedAt: e.timeStamp,
+      side:
+        bounds && e.clientX < bounds.left + bounds.width / 2 ? "left" : "right",
       scrollTop: viewport.current!.scrollTop,
       mode,
       moved: false,
@@ -181,7 +185,12 @@ export function PianoRoll({
   function move(e: PointerEvent<HTMLDivElement>) {
     const g = gesture.current;
     if (!g || g.pointer !== e.pointerId) return;
-    if (Math.hypot(e.clientX - g.x, e.clientY - g.y) > 6) g.moved = true;
+    if (!g.moved && Math.hypot(e.clientX - g.x, e.clientY - g.y) > 6) {
+      // Choose once: a fast drag never turns into resizing halfway through.
+      if (g.mode !== "empty")
+        g.mode = noteDragMode(e.timeStamp - g.startedAt, g.side);
+      g.moved = true;
+    }
     if (!g.moved) return;
     if (g.mode === "empty") {
       if (e.pointerType === "mouse")
@@ -222,7 +231,14 @@ export function PianoRoll({
     gesture.current = null;
     setDraft(null);
     if (!cancel) {
-      const result = finishGesture(notes, g.mode, g.original, g.draft, g.moved);
+      const result = finishGesture(
+        notes,
+        g.mode,
+        g.original,
+        g.draft,
+        g.moved,
+        e.timeStamp - g.startedAt >= NOTE_HOLD_MS,
+      );
       if (result.notes !== notes) onChange(result.notes);
       if (result.preview !== null) onPreview(result.preview);
     }
@@ -356,7 +372,8 @@ export function PianoRoll({
               className="note-grid"
               style={{ height: ROWS * ROW_HEIGHT }}
               role="grid"
-              aria-label="Piano roll. Tap empty space to add a note. Tap a note to erase silently. Scroll or drag empty space to browse pitches. Drag notes to move; drag either edge to resize. Arrow keys select; Enter toggles notes; Shift arrows resize or transpose."
+              aria-label="Piano roll. Tap empty space to add a note. Tap a note to erase silently. Scroll or drag empty space to browse pitches. Drag notes immediately to move. Hold a note for one third of a second, then drag to resize the side you touched. Arrow keys select; Enter toggles notes; Shift arrows resize or transpose."
+              onContextMenu={(e) => e.preventDefault()}
               tabIndex={0}
               onKeyDown={key}
               onPointerDown={down}
@@ -391,12 +408,12 @@ export function PianoRoll({
                   <i
                     data-resize="left"
                     className="note-resize note-resize-left"
-                    title="Drag to resize note start"
+                    title="Drag to move; hold then drag to resize start"
                   />
                   <i
                     data-resize="right"
                     className="note-resize"
-                    title="Drag to resize note"
+                    title="Drag to move; hold then drag to resize end"
                   />
                 </div>
               ))}

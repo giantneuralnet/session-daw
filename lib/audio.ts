@@ -177,14 +177,19 @@ export class AudioEngine {
     };
     this.onStopped();
   }
+  stopAtBarEnd() {
+    this.pending.clear();
+    if (!this.playing) {
+      this.clearPreview();
+      return;
+    }
+    const steps = stepsPerBar(this.project);
+    this.stopAtStep ??= Math.max(steps, Math.ceil(this.step / steps) * steps);
+  }
   finishRecording() {
     if (!this.recording || this.finishing) return;
     this.finishing = true;
-    this.pending.clear();
-    if (this.playing) {
-      const steps = stepsPerBar(this.project);
-      this.stopAtStep = Math.max(steps, Math.ceil(this.step / steps) * steps);
-    }
+    this.stopAtBarEnd();
     const monitor = new TailMonitor();
     const samples = new Float32Array(2048);
     this.tailTimer = setInterval(() => {
@@ -211,7 +216,7 @@ export class AudioEngine {
     }, 50);
   }
   queue(id: string, clip: number) {
-    if (!this.finishing) this.pending.set(id, clip);
+    if (!this.finishing && this.stopAtStep === null) this.pending.set(id, clip);
   }
   tick() {
     if (!this.playing) return;

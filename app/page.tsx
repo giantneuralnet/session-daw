@@ -216,7 +216,7 @@ export default function Session() {
       project.tracks.find((t) => t.id === selected) || project.tracks[0],
     clip = track.clips[clipIndex];
   const barSteps = stepsPerBar(project);
-  const [beats, beatUnit] = signatureOf(project);
+  const [, beatUnit] = signatureOf(project);
   const beatSteps = 16 / beatUnit;
   function flushRecovery() {
     if (!recoveryLoaded.current || !recovery.current)
@@ -582,12 +582,15 @@ export default function Session() {
       setMessage("Audio could not start. Please try again.");
     }
   }
-  function stop() {
+  function stop(immediate = false) {
     if (soundPreviewTimer.current) clearTimeout(soundPreviewTimer.current);
     setPreviewStopRevision((v) => v + 1);
-    engine.current?.stop();
-    setPlaying(false);
-    setStep(-1);
+    if (immediate) engine.current?.stop();
+    else engine.current?.stopAtBarEnd();
+    if (immediate || !engine.current?.playing) {
+      setPlaying(false);
+      setStep(-1);
+    }
     setQueued({});
   }
   useEffect(() => {
@@ -655,7 +658,7 @@ export default function Session() {
     }
   }
   function launch(t: Track, index: number) {
-    if (finishing) return;
+    if (finishing || engine.current?.stopAtStep != null) return;
     if (playing) {
       getEngine().queue(t.id, index);
       setQueued((q) => ({ ...q, [t.id]: index }));
@@ -679,7 +682,7 @@ export default function Session() {
     launch(t, playing && (queued[t.id] ?? t.active) === index ? -1 : index);
   }
   function startFresh() {
-    stop();
+    stop(true);
     engine.current?.dispose();
     engine.current = null;
     const fresh = emptyProject();
@@ -748,7 +751,7 @@ export default function Session() {
       if (f.size > 64 * 1024 * 1024)
         throw Error("Session file is too large (64 MB maximum).");
       const p = parseProject(await f.text());
-      stop();
+      stop(true);
       captures.current = new Map();
       edit(() => ({
         ...p,
@@ -828,7 +831,11 @@ export default function Session() {
       <header className="transport">
         <div className="transport-left">
           <div className="play-controls">
-            <button aria-label="Stop and reset" onClick={stop}>
+            <button
+              aria-label="Stop at end of bar"
+              title="Stop at end of bar"
+              onClick={() => stop()}
+            >
               <Square size={14} fill="currentColor" />
             </button>
             <button
@@ -853,34 +860,8 @@ export default function Session() {
               setShowTempo(true);
             }}
           >
-            <b>{project.bpm}</b>
             <span>BPM</span>
           </button>
-          <span className="signature">
-            {beats} / {beatUnit}
-          </span>
-          <div className="position">
-            {String(step < 0 ? 1 : Math.floor(step / barSteps) + 1).padStart(
-              3,
-              "0",
-            )}
-            <span>.</span>
-            {step < 0 ? 1 : Math.floor((step % barSteps) / beatSteps) + 1}
-            <span>.</span>
-            {step < 0 ? 1 : (step % beatSteps) + 1}
-          </div>
-          <div className="beat-dots">
-            {Array.from({ length: beats }, (_, i) => i).map((i) => (
-              <i
-                key={i}
-                className={
-                  playing && Math.floor((step % barSteps) / beatSteps) === i
-                    ? "lit"
-                    : ""
-                }
-              />
-            ))}
-          </div>
         </div>
         <div className="file-controls">
           <div className="history-controls">
@@ -905,19 +886,26 @@ export default function Session() {
             onClick={startFresh}
             disabled={recording || encoding}
             title="New empty session"
+            aria-label="New empty session"
           >
             <Plus size={15} />
             <span>New</span>
           </button>
-          <button onClick={() => file.current?.click()}>
+          <button
+            aria-label="Open"
+            title="Open"
+            onClick={() => file.current?.click()}
+          >
             <FolderOpen size={15} />
             <span>Open</span>
           </button>
-          <button onClick={save}>
+          <button aria-label="Save" title="Save" onClick={save}>
             <Download size={15} />
             <span>Save</span>
           </button>
           <button
+            aria-label="Export"
+            title="Export"
             onClick={() =>
               recording ? finishRecording() : setShowRecord(true)
             }
@@ -1480,6 +1468,7 @@ export default function Session() {
               <button
                 type="button"
                 aria-label="Close tempo"
+                autoFocus
                 onClick={closeTempo}
               >
                 <X size={18} />
@@ -1490,7 +1479,6 @@ export default function Session() {
                 aria-label="BPM"
                 type="text"
                 inputMode="decimal"
-                autoFocus
                 maxLength={7}
                 value={bpmDraft}
                 aria-invalid={!!bpmError}

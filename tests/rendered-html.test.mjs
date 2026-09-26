@@ -19,6 +19,15 @@ test("production server renders the session controls without starter content", a
   assert.match(viewport[0], /maximum-scale=1/);
   assert.match(viewport[0], /user-scalable=(no|0)/);
   assert.match(html, /Edit tempo, 120 BPM/);
+  assert.match(html, /Stop at end of bar/);
+  const toolbar = html.match(
+    /<header class="transport">([\s\S]*?)<\/header>/,
+  )[1];
+  assert.match(toolbar, /<span>BPM<\/span>/);
+  assert.doesNotMatch(
+    toolbar,
+    /<b>120<|class="position"|class="beat-dots"|class="signature"/,
+  );
   assert.match(html, /Set A4, 440 Hz/);
   assert.match(html, /Set C4, 261.63 Hz/);
   assert.match(html, />Export<\/span>/);

@@ -144,3 +144,26 @@ test("time signatures round-trip and shorter bars preserve notes for later expan
   delete p.timeSignature;
   assert.equal(stepsPerBar(parseProject(JSON.stringify(p))), 16);
 });
+
+test("immediate drags move from either side, while a one-third-second hold selects the resize edge", async () => {
+  const { noteDragMode, NOTE_HOLD_MS, finishGesture } =
+    await import("../lib/piano-roll.ts");
+  for (const side of ["left", "right"]) {
+    assert.equal(noteDragMode(0, side), "move");
+    assert.equal(noteDragMode(NOTE_HOLD_MS - 1, side), "move");
+  }
+  assert.equal(noteDragMode(NOTE_HOLD_MS, "left"), "resize-start");
+  assert.equal(noteDragMode(NOTE_HOLD_MS, "right"), "resize");
+  const n = { id: "a", start: 2, pitch: 7, length: 4 };
+  const notes = [n];
+  assert.deepEqual(
+    finishGesture(notes, "move", n, n, false, true),
+    { notes, preview: null },
+    "releasing a held note without dragging does not erase it",
+  );
+  assert.deepEqual(
+    finishGesture(notes, "move", n, n, false, false),
+    { notes: [], preview: null },
+    "a quick tap still erases silently",
+  );
+});
